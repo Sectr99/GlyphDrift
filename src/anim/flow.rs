@@ -83,7 +83,7 @@ impl Animation for Flow {
         "flow"
     }
 
-    fn min_fps(&self) -> u32 {
+    fn fps(&self) -> u32 {
         30
     }
 

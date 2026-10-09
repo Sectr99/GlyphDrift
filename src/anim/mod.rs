@@ -50,9 +50,9 @@ pub trait Animation {
     fn warm(&self) -> bool {
         false
     }
-    /// Frame rate this animation needs to look smooth; the config fps is raised to it.
-    fn min_fps(&self) -> u32 {
-        0
+    /// Frame rate used when the config says "auto" (fps = 0).
+    fn fps(&self) -> u32 {
+        24
     }
     /// Called once before the first `update`, and again on resize.
     fn init(&mut self, size: Size, seed: u64);
@@ -87,6 +87,13 @@ pub const SPEEDS: &[(f32, &str)] = &[
     (1.0, "1× (normal)"),
     (1.5, "1.5×"),
     (2.0, "2×"),
+];
+
+/// Frame-rate presets offered in the tray: (fps, menu label); 0 = each animation's own.
+pub const FRAME_RATES: &[(f32, &str)] = &[
+    (0.0, "Auto (24 ASCII / 30 graphics)"),
+    (30.0, "30 fps"),
+    (60.0, "60 fps"),
 ];
 
 /// Index of the preset closest to `v`, so a hand-edited config still gets a check mark.

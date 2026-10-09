@@ -1,5 +1,5 @@
-//! Notification-area icon with Animation, Theme, Speed and Glass pickers, Pause/Resume
-//! and Quit.
+//! Notification-area icon with Animation, Theme, Speed, Glass and Frame rate pickers,
+//! Start with Windows, Pause/Resume and Quit.
 //!
 //! Uses its own hidden top-level window: the wallpaper window is a child of WorkerW and
 //! cannot reliably take foreground focus, which popup menus require.
@@ -36,26 +36,26 @@ pub const WM_GET_STATE: u32 = WM_APP + 5;
 pub const WM_SET_SPEED: u32 = WM_APP + 6;
 /// Posted to the wallpaper window with WPARAM = index into `theme::GLASS`.
 pub const WM_SET_GLASS: u32 = WM_APP + 7;
+/// Posted to the wallpaper window with WPARAM = index into `anim::FRAME_RATES`.
+pub const WM_SET_FPS: u32 = WM_APP + 8;
 const ID_QUIT: usize = 2;
 const ID_AUTOSTART: usize = 3;
 const ID_ANIM_BASE: usize = 100;
 const ID_THEME_BASE: usize = 200;
 const ID_SPEED_BASE: usize = 300;
 const ID_GLASS_BASE: usize = 400;
+const ID_FPS_BASE: usize = 500;
 
-/// Current menu selections, one byte each, as the WM_GET_STATE result.
-pub fn pack_state(anim: usize, theme: usize, speed: usize, glass: usize) -> isize {
-    (anim | theme << 8 | speed << 16 | glass << 24) as isize
+/// Current menu selections (preset indices), one byte each, as the WM_GET_STATE result.
+pub fn pack_state(anim: usize, theme: usize, speed: usize, glass: usize, fps: usize) -> isize {
+    [anim, theme, speed, glass, fps]
+        .iter()
+        .enumerate()
+        .fold(0, |acc, (i, &v)| acc | (v & 0xFF) << (8 * i)) as isize
 }
 
-fn unpack_state(v: isize) -> [usize; 4] {
-    let v = v as usize;
-    [
-        v & 0xFF,
-        (v >> 8) & 0xFF,
-        (v >> 16) & 0xFF,
-        (v >> 24) & 0xFF,
-    ]
+fn unpack_state(v: isize) -> [usize; 5] {
+    std::array::from_fn(|i| (v as usize >> (8 * i)) & 0xFF)
 }
 
 /// Submenu of radio items `base + i` labelled `labels`, with `checked` marked.
@@ -195,7 +195,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_TRAY if lp.0 as u32 == WM_RBUTTONUP => {
             let target = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
             if let Ok(menu) = CreatePopupMenu() {
-                let [anim_i, theme_i, speed_i, glass_i] =
+                let [anim_i, theme_i, speed_i, glass_i, fps_i] =
                     unpack_state(SendMessageW(target, WM_GET_STATE, WPARAM(0), LPARAM(0)).0);
                 let anims = crate::anim::ANIMATIONS.iter().map(|a| a.1);
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
@@ -212,6 +212,10 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 let glass = crate::theme::GLASS.iter().map(|g| g.1);
                 if let Some(sub) = radio_submenu(glass, ID_GLASS_BASE, glass_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Glass"));
+                }
+                let rates = crate::anim::FRAME_RATES.iter().map(|r| r.1);
+                if let Some(sub) = radio_submenu(rates, ID_FPS_BASE, fps_i) {
+                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Frame rate"));
                 }
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
                 let autostart = crate::autostart::enabled();
@@ -247,6 +251,10 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     }
                     ID_QUIT => {
                         let _ = PostMessageW(target, WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                    id if id >= ID_FPS_BASE => {
+                        let _ =
+                            PostMessageW(target, WM_SET_FPS, WPARAM(id - ID_FPS_BASE), LPARAM(0));
                     }
                     id if id >= ID_GLASS_BASE => {
                         let _ = PostMessageW(

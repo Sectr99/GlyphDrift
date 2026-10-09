@@ -4,19 +4,26 @@ use std::ffi::c_void;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{w, Error, Result};
-use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, BOOL, COLORREF, HANDLE, HWND, LPARAM, LRESULT, WAIT_OBJECT_0, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{
+    CreateWaitableTimerExW, SetWaitableTimer, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE,
+    TIMER_ALL_ACCESS,
+};
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, IsWindow, MessageBoxW, PostQuitMessage, RegisterClassW,
-    SetLayeredWindowAttributes, SetParent, SetTimer, SetWindowLongPtrW, TranslateMessage,
-    CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR, MB_OK, MSG, WM_CLOSE, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_NCCREATE, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
-    WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW, IsWindow,
+    MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostQuitMessage, RegisterClassW,
+    SendMessageW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW, TranslateMessage,
+    CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR, MB_OK, MSG, MWMO_INPUTAVAILABLE,
+    PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_NCCREATE,
+    WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 use crate::anim::{self, Animation};
@@ -32,12 +39,48 @@ use crate::tray;
 const TIMER_ID: usize = 1;
 const PAUSED_INTERVAL_MS: u32 = 1000;
 
+/// Frame clock. WM_TIMER fires on the ~15.6 ms system tick, so asking for 33 ms gives
+/// ~21 fps; a high-resolution waitable timer (Windows 10 1803+) gives the real rate without
+/// raising the system-wide timer resolution. Older systems fall back to a normal timer.
+struct FrameTimer(HANDLE);
+
+impl FrameTimer {
+    fn new() -> Result<Self> {
+        let access = TIMER_ALL_ACCESS.0;
+        // SAFETY: plain object creation; the handle is closed in Drop.
+        unsafe {
+            CreateWaitableTimerExW(None, None, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, access)
+                .or_else(|_| CreateWaitableTimerExW(None, None, 0, access))
+                .map(Self)
+        }
+    }
+
+    /// Fire every `ms` milliseconds, starting `ms` from now.
+    fn set(&self, ms: u32) {
+        let due = -(ms as i64 * 10_000); // negative = relative, in 100 ns units
+                                         // SAFETY: `due` outlives the call; no completion routine.
+        unsafe {
+            let _ = SetWaitableTimer(self.0, &due, ms as i32, None, None, false);
+        }
+    }
+}
+
+impl Drop for FrameTimer {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateWaitableTimerExW and is closed once.
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
 struct App {
     cfg: Config,
     grid: Grid,
     shapes: Vec<Shape>,
     anim: Box<dyn Animation>,
     renderer: Renderer,
+    timer: FrameTimer,
     parent: HWND,
     width: i32,
     height: i32,
@@ -59,7 +102,11 @@ impl App {
         if self.paused() {
             PAUSED_INTERVAL_MS
         } else {
-            1000 / self.cfg.general.fps.max(self.anim.min_fps()).max(1)
+            let fps = match self.cfg.general.fps {
+                0 => self.anim.fps(),
+                n => n,
+            };
+            1000 / fps.max(1)
         }
     }
 
@@ -190,7 +237,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let changed = app.refresh_pause() || reloaded;
                 if changed {
                     app.last_frame = Instant::now();
-                    SetTimer(hwnd, TIMER_ID, app.interval_ms(), None);
+                    app.timer.set(app.interval_ms());
                 }
                 if !app.paused() {
                     let now = Instant::now();
@@ -226,6 +273,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 theme::index_of(&app.cfg.theme.name),
                 anim::nearest(anim::SPEEDS, app.cfg.general.speed),
                 anim::nearest(theme::GLASS, app.cfg.theme.glass),
+                anim::nearest(anim::FRAME_RATES, app.cfg.general.fps as f32),
             )),
             None => LRESULT(0),
         },
@@ -235,7 +283,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.anim = anim::by_name(name, &app.cfg.theme.ramp);
                 app.resize(app.width, app.height); // re-inits and renders a first frame
                 app.apply_colors();
-                SetTimer(hwnd, TIMER_ID, app.interval_ms(), None); // frame rate may differ
+                app.timer.set(app.interval_ms()); // frame rate may differ
                 save("general", "animation", name);
                 let _ = InvalidateRect(hwnd, None, BOOL(0));
             }
@@ -247,6 +295,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.apply_colors();
                 save("theme", "name", t.name);
                 let _ = InvalidateRect(hwnd, None, BOOL(0));
+            }
+            LRESULT(0)
+        }
+        tray::WM_SET_FPS => {
+            if let (Some(app), Some(&(fps, _))) = (app_of(hwnd), anim::FRAME_RATES.get(wp.0)) {
+                app.cfg.general.fps = fps as u32;
+                app.timer.set(app.interval_ms());
+                save("general", "fps", fps as i64);
             }
             LRESULT(0)
         }
@@ -270,7 +326,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if let Some(app) = app_of(hwnd) {
                 app.user_paused = !app.user_paused;
                 app.last_frame = Instant::now();
-                SetTimer(hwnd, TIMER_ID, app.interval_ms(), None);
+                app.timer.set(app.interval_ms());
             }
             LRESULT(0)
         }
@@ -333,6 +389,7 @@ pub fn run() -> Result<()> {
             shapes: Vec::new(),
             anim,
             renderer,
+            timer: FrameTimer::new()?,
             parent,
             width: 0,
             height: 0,
@@ -377,12 +434,29 @@ pub fn run() -> Result<()> {
             desktop::place(hwnd, parent);
 
             let tray = tray::create(hwnd)?;
-            SetTimer(hwnd, TIMER_ID, (*app_ptr).interval_ms(), None);
+            (*app_ptr).timer.set((*app_ptr).interval_ms());
 
+            // Wait for either a frame tick or window messages. A tick is delivered as the
+            // WM_TIMER the window procedure already handles.
+            let timer = (*app_ptr).timer.0;
             let mut msg = MSG::default();
-            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            'pump: loop {
+                let wake = MsgWaitForMultipleObjectsEx(
+                    Some(&[timer]),
+                    INFINITE,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE,
+                );
+                if wake == WAIT_OBJECT_0 {
+                    SendMessageW(hwnd, WM_TIMER, WPARAM(TIMER_ID), LPARAM(0));
+                }
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    if msg.message == WM_QUIT {
+                        break 'pump;
+                    }
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
             tray::destroy(tray);
             Ok(())

@@ -3,10 +3,10 @@
 A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behind your desktop icons.
 
 - Single portable exe (~0.7 MB), no installer, no admin rights, no network access
-- Animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind
+- Animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (vector graphics)
 - Themes: Matrix, Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark
 - Pauses automatically for fullscreen apps and Windows battery saver
-- About 0.2–0.6% CPU at 24 FPS; around 45 MB of memory, most of it the GPU driver
+- About 0.3–0.7% CPU at the default frame rate, under 2% at 60 FPS; around 45 MB of memory, most of it the GPU driver
 
 ## Use
 
@@ -17,6 +17,7 @@ Run `ascii-wallpaper.exe`. Everything is controlled from its tray icon (right-cl
 | Animation | Switch animation |
 | Theme | Switch color theme |
 | Speed | 0.25× to 2× |
+| Frame rate | Auto (24 FPS for ASCII, 30 for graphics), 30 or 60 FPS; higher is smoother but uses more CPU |
 | Glass | Frosted veil over the animation (Off / Light / Medium / Strong) so icon labels stay readable |
 | Start with Windows | Run at sign-in (also listed in Settings > Apps > Startup) |
 | Pause / Resume | Stop or restart the animation |

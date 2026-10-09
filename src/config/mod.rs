@@ -57,7 +57,7 @@ pub struct Config {
 impl Default for General {
     fn default() -> Self {
         Self {
-            fps: 24,
+            fps: 0,
             animation: "matrix".into(),
             speed: 1.0,
             pause_on_fullscreen: true,
@@ -101,7 +101,12 @@ impl Config {
     }
 
     fn validate(&mut self, w: &mut Vec<String>) {
-        let fps = self.general.fps.clamp(1, 60);
+        // 0 means auto: each animation's own frame rate.
+        let fps = if self.general.fps == 0 {
+            0
+        } else {
+            self.general.fps.clamp(1, 60)
+        };
         if fps != self.general.fps {
             w.push(format!(
                 "fps {} out of range, using {fps}",
@@ -226,7 +231,7 @@ mod tests {
     fn empty_is_defaults() {
         let (c, w) = Config::from_toml("");
         assert!(w.is_empty());
-        assert_eq!(c.general.fps, 24);
+        assert_eq!(c.general.fps, 0);
         assert_eq!(c.theme.name, "matrix");
     }
 
@@ -246,7 +251,7 @@ mod tests {
     #[test]
     fn syntax_error_gives_defaults() {
         let (c, w) = Config::from_toml("[general\nfps = ");
-        assert_eq!(c.general.fps, 24);
+        assert_eq!(c.general.fps, 0);
         assert_eq!(w.len(), 1);
     }
 

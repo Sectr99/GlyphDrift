@@ -3,6 +3,8 @@
 mod constellation;
 mod fire;
 mod flow;
+mod geom;
+mod loops;
 mod matrix;
 mod plasma;
 mod ripples;
@@ -13,6 +15,7 @@ mod wind;
 pub use constellation::Constellation;
 pub use fire::Fire;
 pub use flow::Flow;
+pub use loops::{Cubes, DotWave, Globe, Helix};
 pub use matrix::Matrix;
 pub use plasma::Plasma;
 pub use ripples::Ripples;
@@ -77,6 +80,10 @@ pub const ANIMATIONS: &[(&str, &str)] = &[
     ("wind", "Wind"),
     ("constellation", "Constellation"),
     ("flow", "Flow field"),
+    ("helix", "Helix"),
+    ("globe", "Wire globe"),
+    ("dotwave", "Dot wave"),
+    ("cubes", "Cubes"),
 ];
 
 /// Speed presets offered in the tray: (multiplier, menu label).
@@ -121,6 +128,10 @@ pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
         "wind" => Box::new(Wind::new()),
         "constellation" => Box::new(Constellation::new()),
         "flow" => Box::new(Flow::new()),
+        "helix" => Box::new(Helix::new()),
+        "globe" => Box::new(Globe::new()),
+        "dotwave" => Box::new(DotWave::new()),
+        "cubes" => Box::new(Cubes::new()),
         _ => Box::new(Matrix::new()),
     }
 }

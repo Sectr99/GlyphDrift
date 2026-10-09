@@ -3,7 +3,7 @@
 //! Uses its own hidden top-level window: the wallpaper window is a child of WorkerW and
 //! cannot reliably take foreground focus, which popup menus require.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 
 use windows::core::{w, Result};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -12,11 +12,12 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    GetCursorPos, GetWindowLongPtrW, LoadIconW, PostMessageW, RegisterClassW,
-    RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, CREATESTRUCTW,
-    GWLP_USERDATA, IDI_APPLICATION, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
-    WM_APP, WM_CLOSE, WM_DESTROY, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
+    AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
+    DestroyMenu, DestroyWindow, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, LoadIconW,
+    PostMessageW, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW,
+    TrackPopupMenu, CREATESTRUCTW, GWLP_USERDATA, HICON, IDI_APPLICATION, MF_STRING, SM_CXSMICON,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_NCCREATE,
+    WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
 };
 
 /// Posted to the wallpaper window when the user picks Pause/Resume.
@@ -25,6 +26,66 @@ const WM_TRAY: u32 = WM_APP + 1;
 const ID_PAUSE: usize = 1;
 const ID_QUIT: usize = 2;
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+/// The tray HICON, created in `create` and destroyed in `destroy`; 0 = stock icon.
+static ICON: AtomicIsize = AtomicIsize::new(0);
+
+/// Holes cut from the filled 2..22 square, in the 24x24 viewBox of `assets/icon.svg`
+/// (x0, y0, x1, y1).
+const ICON_HOLES: [[f32; 4]; 8] = [
+    [4.0, 16.0, 8.0, 20.0],
+    [10.0, 16.0, 16.0, 20.0],
+    [18.0, 16.0, 20.0, 20.0],
+    [13.0, 10.0, 20.0, 14.0],
+    [4.0, 10.0, 11.0, 14.0],
+    [4.0, 4.0, 6.0, 8.0],
+    [8.0, 4.0, 14.0, 8.0],
+    [16.0, 4.0, 20.0, 8.0],
+];
+/// White, like the stock notification-area icons.
+const ICON_RGB: (u8, u8, u8) = (0xff, 0xff, 0xff);
+
+/// Fraction of pixel (px, py) of an `n` x `n` icon covered by the shape (4x4 supersampling).
+fn icon_coverage(px: usize, py: usize, n: usize) -> f32 {
+    const S: usize = 4;
+    let inside = |x: f32, y: f32| {
+        (2.0..22.0).contains(&x)
+            && (2.0..22.0).contains(&y)
+            && !ICON_HOLES
+                .iter()
+                .any(|h| x >= h[0] && x < h[2] && y >= h[1] && y < h[3])
+    };
+    let to_view = |p: usize, s: usize| (p as f32 + (s as f32 + 0.5) / S as f32) * 24.0 / n as f32;
+    let hits = (0..S * S)
+        .filter(|i| inside(to_view(px, i % S), to_view(py, i / S)))
+        .count();
+    hits as f32 / (S * S) as f32
+}
+
+/// Rasterize the icon at the small-icon size (DPI-scaled) into a 32-bit alpha HICON.
+unsafe fn make_icon() -> HICON {
+    let n = GetSystemMetrics(SM_CXSMICON).clamp(16, 256) as usize;
+    let mut bgra = Vec::with_capacity(n * n * 4);
+    for y in 0..n {
+        for x in 0..n {
+            let a = (icon_coverage(x, y, n) * 255.0).round() as u8;
+            bgra.extend([ICON_RGB.2, ICON_RGB.1, ICON_RGB.0, a]);
+        }
+    }
+    // 1-bpp AND mask, rows padded to 16 bits; all zero so the alpha channel decides.
+    let mask = vec![0u8; n.div_ceil(16) * 2 * n];
+    // SAFETY: `bgra` holds n*n 32-bit pixels and `mask` n rows of WORD-aligned 1-bpp bits,
+    // the sizes CreateIcon reads for an n x n, 1-plane, 32-bpp icon.
+    CreateIcon(
+        None,
+        n as i32,
+        n as i32,
+        1,
+        32,
+        mask.as_ptr(),
+        bgra.as_ptr(),
+    )
+    .unwrap_or_default()
+}
 
 /// Create the tray window + icon. `wallpaper` receives WM_TOGGLE_PAUSE / WM_CLOSE.
 pub fn create(wallpaper: HWND) -> Result<HWND> {
@@ -59,6 +120,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
             hinst,
             Some(wallpaper.0 as *const _),
         )?;
+        ICON.store(make_icon().0 as isize, Ordering::Relaxed);
         add_icon(hwnd);
         Ok(hwnd)
     }
@@ -69,6 +131,10 @@ pub fn destroy(tray: HWND) {
     unsafe {
         remove_icon(tray);
         let _ = DestroyWindow(tray);
+        let icon = ICON.swap(0, Ordering::Relaxed);
+        if icon != 0 {
+            let _ = DestroyIcon(HICON(icon as *mut _));
+        }
     }
 }
 
@@ -79,7 +145,10 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
         uID: 1,
         uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
         uCallbackMessage: WM_TRAY,
-        hIcon: LoadIconW(None, IDI_APPLICATION).unwrap_or_default(),
+        hIcon: match ICON.load(Ordering::Relaxed) {
+            0 => LoadIconW(None, IDI_APPLICATION).unwrap_or_default(),
+            icon => HICON(icon as *mut _),
+        },
         ..Default::default()
     };
     for (dst, src) in nid.szTip.iter_mut().zip("ASCII Wallpaper".encode_utf16()) {
@@ -140,5 +209,21 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::icon_coverage;
+
+    #[test]
+    fn icon_shape_matches_svg() {
+        // At 24 px one pixel is one viewBox unit.
+        assert_eq!(icon_coverage(0, 0, 24), 0.0); // outside the frame
+        assert_eq!(icon_coverage(2, 2, 24), 1.0); // frame corner
+        assert_eq!(icon_coverage(5, 5, 24), 0.0); // hole [4,4]-[6,8]
+        assert_eq!(icon_coverage(12, 14, 24), 1.0); // bar between hole rows
+        let partial = icon_coverage(1, 1, 16); // edge straddles the pixel at 16 px
+        assert!(partial > 0.0 && partial < 1.0);
     }
 }

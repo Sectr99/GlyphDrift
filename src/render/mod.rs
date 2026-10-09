@@ -1,77 +1,158 @@
-//! Grid renderer.
+//! Grid renderer: Direct2D + DirectWrite.
 //!
-//! M1/M2 scaffold uses GDI with a back buffer so it has no extra dependencies and is
-//! easy to verify. The design calls for Direct2D/DirectWrite (then a GPU glyph atlas);
-//! keep the public surface (`new`, `cell_size`, `paint`) stable so the swap is local.
+//! All cells of one brightness level go out in a single `DrawGlyphRun`, each glyph placed
+//! with a glyph offset, so a frame is at most `LEVELS` draw calls. A DC render target
+//! draws into the WM_PAINT DC, which keeps the public surface (`new`, `cell_size`,
+//! `paint`) independent of the window. The next step up is a GPU glyph atlas.
+
+use std::mem::ManuallyDrop;
 
 use crate::config::Rgb;
 use crate::grid::Grid;
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, RECT};
-use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush, DeleteDC,
-    DeleteObject, FillRect, GetDC, GetTextMetricsW, ReleaseDC, SelectObject, SetBkMode,
-    SetTextColor, TextOutW, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, FF_MODERN,
-    FIXED_PITCH, FW_NORMAL, HDC, HFONT, OUT_DEFAULT_PRECIS, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+use windows::core::{Result, HSTRING};
+use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F,
 };
+use windows::Win32::Graphics::Direct2D::{
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+};
+use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN,
+    DWRITE_MEASURING_MODE_NATURAL,
+};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Gdi::HDC;
 
 const LEVELS: usize = 16;
+const FALLBACK_FONT: &str = "Consolas";
 
-pub struct GdiRenderer {
-    font: HFONT,
+pub struct Renderer {
+    factory: ID2D1Factory,
+    face: IDWriteFontFace,
+    em: f32,
+    baseline: f32,
     cell_w: i32,
     cell_h: i32,
-    bg: COLORREF,
+    bg: D2D1_COLOR_F,
     /// Foreground color pre-scaled for each brightness level.
-    palette: [COLORREF; LEVELS],
+    palette: [D2D1_COLOR_F; LEVELS],
+    /// Device-dependent resources; dropped and rebuilt on D2DERR_RECREATE_TARGET.
+    target: Option<Target>,
+    /// Per-level glyph batches, reused across frames to avoid allocation.
+    batches: [Batch; LEVELS],
 }
 
-fn colorref(r: u8, g: u8, b: u8) -> COLORREF {
-    COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16)
+struct Target {
+    rt: ID2D1DCRenderTarget,
+    brushes: Vec<ID2D1SolidColorBrush>,
 }
 
-impl GdiRenderer {
-    pub fn new(family: &str, pixel_height: i32, fg: Rgb, bg: Rgb) -> Self {
-        let face: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: `face` is NUL-terminated and outlives the call; the screen DC is released.
+/// All glyphs of one brightness level, drawn with a single `DrawGlyphRun`.
+#[derive(Default)]
+struct Batch {
+    codepoints: Vec<u32>,
+    glyphs: Vec<u16>,
+    advances: Vec<f32>,
+    /// Absolute cell positions; DirectWrite's ascender offset points up, hence `-y`.
+    offsets: Vec<DWRITE_GLYPH_OFFSET>,
+}
+
+impl Batch {
+    fn clear(&mut self) {
+        self.codepoints.clear();
+        self.offsets.clear();
+    }
+
+    fn push(&mut self, x: f32, y: f32, ch: char) {
+        self.codepoints.push(ch as u32);
+        self.offsets.push(DWRITE_GLYPH_OFFSET {
+            advanceOffset: x,
+            ascenderOffset: -y,
+        });
+    }
+}
+
+fn color(c: Rgb) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: c.0 as f32 / 255.0,
+        g: c.1 as f32 / 255.0,
+        b: c.2 as f32 / 255.0,
+        a: 1.0,
+    }
+}
+
+impl Renderer {
+    pub fn new(family: &str, pixel_height: i32, fg: Rgb, bg: Rgb) -> Result<Self> {
+        // SAFETY: factory/font calls with valid arguments; every out-pointer is a live local.
         unsafe {
-            let font = CreateFontW(
-                -pixel_height,
-                0,
-                0,
-                0,
-                FW_NORMAL.0 as i32,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET.0 as u32,
-                OUT_DEFAULT_PRECIS.0 as u32,
-                CLIP_DEFAULT_PRECIS.0 as u32,
-                CLEARTYPE_QUALITY.0 as u32,
-                (FIXED_PITCH.0 | FF_MODERN.0) as u32,
-                PCWSTR(face.as_ptr()),
-            );
-            let dc = GetDC(None);
-            let old = SelectObject(dc, font);
-            let mut tm = TEXTMETRICW::default();
-            let _ = GetTextMetricsW(dc, &mut tm);
-            SelectObject(dc, old);
-            ReleaseDC(None, dc);
+            let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+            let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
 
-            let mut palette = [COLORREF(0); LEVELS];
+            let mut fonts = None;
+            dwrite.GetSystemFontCollection(&mut fonts, false)?;
+            let fonts = fonts.ok_or_else(windows::core::Error::empty)?;
+            // Unknown family: fall back to Consolas, then to whatever font comes first.
+            let mut index = 0;
+            for name in [family, FALLBACK_FONT] {
+                let (mut i, mut exists) = (0u32, BOOL(0));
+                fonts.FindFamilyName(&HSTRING::from(name), &mut i, &mut exists)?;
+                if exists.as_bool() {
+                    index = i;
+                    break;
+                }
+                eprintln!("font: '{name}' not found");
+            }
+            let face = fonts
+                .GetFontFamily(index)?
+                .GetFirstMatchingFont(
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                )?
+                .CreateFontFace()?;
+
+            // Same sizing as the GDI renderer: em height = pixel_height, cell height =
+            // ascent + descent, cell width = advance of 'M'.
+            let em = pixel_height as f32;
+            let mut m = DWRITE_FONT_METRICS::default();
+            face.GetMetrics(&mut m);
+            let scale = em / m.designUnitsPerEm.max(1) as f32;
+            let mut glyph = 0u16;
+            face.GetGlyphIndices(&('M' as u32), 1, &mut glyph)?;
+            let mut gm = DWRITE_GLYPH_METRICS::default();
+            face.GetDesignGlyphMetrics(&glyph, 1, &mut gm, false)?;
+
+            let fg = color(fg);
+            let bg = color(bg);
+            let mut palette = [bg; LEVELS];
             for (i, slot) in palette.iter_mut().enumerate() {
                 let k = (i + 1) as f32 / LEVELS as f32;
-                let mix = |f: u8, b: u8| (b as f32 + (f as f32 - b as f32) * k) as u8;
-                *slot = colorref(mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2));
+                let mix = |f: f32, b: f32| b + (f - b) * k;
+                *slot = D2D1_COLOR_F {
+                    r: mix(fg.r, bg.r),
+                    g: mix(fg.g, bg.g),
+                    b: mix(fg.b, bg.b),
+                    a: 1.0,
+                };
             }
 
-            Self {
-                font,
-                cell_w: tm.tmAveCharWidth.max(1),
-                cell_h: tm.tmHeight.max(1),
-                bg: colorref(bg.0, bg.1, bg.2),
+            Ok(Self {
+                factory,
+                face,
+                em,
+                baseline: m.ascent as f32 * scale,
+                cell_w: ((gm.advanceWidth as f32 * scale).round() as i32).max(1),
+                cell_h: (((m.ascent + m.descent) as f32 * scale).ceil() as i32).max(1),
+                bg,
                 palette,
-            }
+                target: None,
+                batches: Default::default(),
+            })
         }
     }
 
@@ -79,64 +160,135 @@ impl GdiRenderer {
         (self.cell_w, self.cell_h)
     }
 
-    /// Draw `grid` into `hdc` (a `width` x `height` client area) through a back buffer.
-    pub fn paint(&self, hdc: HDC, width: i32, height: i32, grid: &Grid) {
+    /// Draw `grid` into `hdc` (a `width` x `height` client area).
+    pub fn paint(&mut self, hdc: HDC, width: i32, height: i32, grid: &Grid) {
         if width <= 0 || height <= 0 {
             return;
         }
-        // SAFETY: every GDI object created here is deselected and deleted before return.
+        if let Err(e) = self.try_paint(hdc, width, height, grid) {
+            if e.code() == D2DERR_RECREATE_TARGET {
+                self.target = None; // rebuilt on the next frame
+            } else {
+                eprintln!("render: {e}");
+            }
+        }
+    }
+
+    fn try_paint(&mut self, hdc: HDC, width: i32, height: i32, grid: &Grid) -> Result<()> {
+        for b in &mut self.batches {
+            b.clear();
+        }
+        for y in 0..grid.rows() {
+            for (x, cell) in grid.row(y).iter().enumerate() {
+                if cell.brightness == 0 || cell.ch == ' ' {
+                    continue;
+                }
+                let level = (cell.brightness as usize * LEVELS / 256).min(LEVELS - 1);
+                self.batches[level].push(
+                    (x as i32 * self.cell_w) as f32,
+                    (y as i32 * self.cell_h) as f32,
+                    cell.ch,
+                );
+            }
+        }
+
+        // SAFETY: COM calls on live interfaces. Every batch has equally long codepoints,
+        // glyphs, advances and offsets, and those buffers outlive the DrawGlyphRun calls.
         unsafe {
-            let mem = CreateCompatibleDC(hdc);
-            let bmp = CreateCompatibleBitmap(hdc, width, height);
-            let old_bmp = SelectObject(mem, bmp);
-            let old_font = SelectObject(mem, self.font);
-
-            let brush = CreateSolidBrush(self.bg);
-            FillRect(
-                mem,
-                &RECT {
-                    left: 0,
-                    top: 0,
-                    right: width,
-                    bottom: height,
-                },
-                brush,
-            );
-            let _ = DeleteObject(brush);
-            SetBkMode(mem, TRANSPARENT);
-
-            let mut last_level = usize::MAX;
-            for y in 0..grid.rows() {
-                for (x, cell) in grid.row(y).iter().enumerate() {
-                    if cell.brightness == 0 || cell.ch == ' ' {
-                        continue;
-                    }
-                    let level = (cell.brightness as usize * LEVELS / 256).min(LEVELS - 1);
-                    if level != last_level {
-                        SetTextColor(mem, self.palette[level]);
-                        last_level = level;
-                    }
-                    let mut buf = [0u16; 2];
-                    let s = cell.ch.encode_utf16(&mut buf);
-                    let _ = TextOutW(mem, x as i32 * self.cell_w, y as i32 * self.cell_h, s);
+            for b in &mut self.batches {
+                let n = b.codepoints.len();
+                b.glyphs.resize(n, 0);
+                b.advances.resize(n, 0.0);
+                if n > 0 {
+                    self.face.GetGlyphIndices(
+                        b.codepoints.as_ptr(),
+                        n as u32,
+                        b.glyphs.as_mut_ptr(),
+                    )?;
                 }
             }
 
-            let _ = BitBlt(hdc, 0, 0, width, height, mem, 0, 0, SRCCOPY);
+            if self.target.is_none() {
+                self.target = Some(self.create_target()?);
+            }
+            let t = self.target.as_ref().unwrap();
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            };
+            t.rt.BindDC(hdc, &rect)?;
+            t.rt.BeginDraw();
+            t.rt.Clear(Some(&self.bg));
+            let origin = D2D_POINT_2F {
+                x: 0.0,
+                y: self.baseline,
+            };
+            for (b, brush) in self.batches.iter().zip(&t.brushes) {
+                if b.glyphs.is_empty() {
+                    continue;
+                }
+                let run = DWRITE_GLYPH_RUN {
+                    fontFace: ManuallyDrop::new(Some(self.face.clone())),
+                    fontEmSize: self.em,
+                    glyphCount: b.glyphs.len() as u32,
+                    glyphIndices: b.glyphs.as_ptr(),
+                    glyphAdvances: b.advances.as_ptr(),
+                    glyphOffsets: b.offsets.as_ptr(),
+                    isSideways: BOOL(0),
+                    bidiLevel: 0,
+                };
+                t.rt.DrawGlyphRun(origin, &run, brush, DWRITE_MEASURING_MODE_NATURAL);
+                // Release the reference taken by `clone` above.
+                drop(ManuallyDrop::into_inner(run.fontFace));
+            }
+            t.rt.EndDraw(None, None)
+        }
+    }
 
-            SelectObject(mem, old_font);
-            SelectObject(mem, old_bmp);
-            let _ = DeleteObject(bmp);
-            let _ = DeleteDC(mem);
+    fn create_target(&self) -> Result<Target> {
+        let props = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+            },
+            // 96 DPI: one DIP per pixel. The process is per-monitor DPI aware and the
+            // grid is laid out in physical pixels.
+            dpiX: 96.0,
+            dpiY: 96.0,
+            usage: D2D1_RENDER_TARGET_USAGE_NONE,
+            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+        };
+        // SAFETY: `props` and each palette color are valid for the duration of the calls.
+        unsafe {
+            let rt = self.factory.CreateDCRenderTarget(&props)?;
+            let brushes = self
+                .palette
+                .iter()
+                .map(|c| rt.CreateSolidColorBrush(c, None))
+                .collect::<Result<_>>()?;
+            Ok(Target { rt, brushes })
         }
     }
 }
 
-impl Drop for GdiRenderer {
-    fn drop(&mut self) {
-        // SAFETY: the font was created in `new` and is not selected into any live DC.
-        unsafe {
-            let _ = DeleteObject(self.font);
-        }
+#[cfg(test)]
+mod tests {
+    use super::Batch;
+
+    #[test]
+    fn batch_offsets_are_absolute_with_y_up() {
+        let mut b = Batch::default();
+        b.push(10.0, 20.0, 'a');
+        b.push(30.0, 50.0, 'b');
+        assert_eq!(b.codepoints, ['a' as u32, 'b' as u32]);
+        let o: Vec<_> = b
+            .offsets
+            .iter()
+            .map(|o| (o.advanceOffset, o.ascenderOffset))
+            .collect();
+        assert_eq!(o, [(10.0, -20.0), (30.0, -50.0)]);
     }
 }

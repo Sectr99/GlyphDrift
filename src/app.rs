@@ -24,7 +24,7 @@ use crate::config::{self, Config};
 use crate::desktop;
 use crate::grid::Grid;
 use crate::power;
-use crate::render::GdiRenderer;
+use crate::render::Renderer;
 use crate::tray;
 
 const TIMER_ID: usize = 1;
@@ -34,7 +34,7 @@ struct App {
     cfg: Config,
     grid: Grid,
     anim: Box<dyn Animation>,
-    renderer: GdiRenderer,
+    renderer: Renderer,
     parent: HWND,
     width: i32,
     height: i32,
@@ -180,12 +180,12 @@ pub fn run() -> Result<()> {
         eprintln!("config: {w}");
     }
 
-    let renderer = GdiRenderer::new(
+    let renderer = Renderer::new(
         &cfg.font.family,
         cfg.font.size,
         cfg.foreground(),
         cfg.background(),
-    );
+    )?;
     let anim = anim::by_name(&cfg.general.animation, &cfg.theme.ramp);
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)

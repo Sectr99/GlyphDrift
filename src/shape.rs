@@ -1,0 +1,21 @@
+//! Vector shapes that animations can emit alongside (or instead of) the character grid.
+//!
+//! Coordinates are pixels in the wallpaper window. `level` is a brightness 0..=255 mapped
+//! through the same theme palette as grid cells, so themes and glass apply unchanged.
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    Line {
+        a: (f32, f32),
+        b: (f32, f32),
+        width: f32,
+        level: u8,
+    },
+    Circle {
+        c: (f32, f32),
+        r: f32,
+        /// Filled disc if true, otherwise a 1 px outline.
+        fill: bool,
+        level: u8,
+    },
+}

@@ -1,6 +1,6 @@
 //! Wind: soft streaks drifting across the screen on gently curving paths.
 
-use super::{Animation, Rng};
+use super::{Animation, Rng, Size};
 use crate::grid::{Cell, Grid};
 
 const CELLS_PER_GUST: f32 = 200.0;
@@ -62,7 +62,8 @@ impl Animation for Wind {
         "wind"
     }
 
-    fn init(&mut self, cols: usize, rows: usize, seed: u64) {
+    fn init(&mut self, size: Size, seed: u64) {
+        let (cols, rows) = (size.cols, size.rows);
         self.cols = cols;
         self.rows = rows;
         self.rng = Rng::new(seed);

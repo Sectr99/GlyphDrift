@@ -2,7 +2,7 @@
 
 use std::f32::consts::TAU;
 
-use super::{rng::hash3, Animation};
+use super::{rng::hash3, Animation, Size};
 use crate::grid::{Cell, Grid};
 
 /// Horizon position as a fraction of screen height; above it is empty sky.
@@ -29,7 +29,7 @@ impl Animation for Waves {
         "waves"
     }
 
-    fn init(&mut self, _cols: usize, _rows: usize, seed: u64) {
+    fn init(&mut self, _size: Size, seed: u64) {
         // Seed only offsets the phase, so restarts don't all look identical.
         self.t = (seed % 1000) as f32;
     }

@@ -1,4 +1,4 @@
-use super::Animation;
+use super::{Animation, Size};
 use crate::grid::{Cell, Grid};
 
 pub struct Plasma {
@@ -38,7 +38,8 @@ impl Animation for Plasma {
         "plasma"
     }
 
-    fn init(&mut self, cols: usize, rows: usize, _seed: u64) {
+    fn init(&mut self, size: Size, _seed: u64) {
+        let (cols, rows) = (size.cols, size.rows);
         self.cols = cols;
         self.rows = rows;
         self.t = 0.0;
@@ -75,7 +76,7 @@ mod tests {
     #[test]
     fn uses_whole_ramp_range() {
         let mut p = Plasma::new(" .:-=+*#%@");
-        p.init(80, 40, 0);
+        p.init(Size::cells(80, 40), 0);
         let mut seen = std::collections::HashSet::new();
         let mut g = Grid::new(80, 40);
         for _ in 0..40 {

@@ -1,6 +1,6 @@
 //! Classic heat-propagation fire, kept low (about a third of the screen) and soft.
 
-use super::{Animation, Rng};
+use super::{Animation, Rng, Size};
 use crate::grid::{Cell, Grid};
 
 /// Simulation step; the fire looks the same at any frame rate.
@@ -60,7 +60,8 @@ impl Animation for Fire {
         true
     }
 
-    fn init(&mut self, cols: usize, rows: usize, seed: u64) {
+    fn init(&mut self, size: Size, seed: u64) {
+        let (cols, rows) = (size.cols, size.rows);
         self.cols = cols;
         self.rows = rows.max(2);
         self.heat = vec![0.0; self.cols * self.rows];

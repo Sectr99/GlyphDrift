@@ -1,6 +1,8 @@
 //! Animation trait and built-in animations.
 
+mod constellation;
 mod fire;
+mod flow;
 mod matrix;
 mod plasma;
 mod ripples;
@@ -8,7 +10,9 @@ mod rng;
 mod waves;
 mod wind;
 
+pub use constellation::Constellation;
 pub use fire::Fire;
+pub use flow::Flow;
 pub use matrix::Matrix;
 pub use plasma::Plasma;
 pub use ripples::Ripples;
@@ -17,6 +21,28 @@ pub use waves::Waves;
 pub use wind::Wind;
 
 use crate::grid::Grid;
+use crate::shape::Shape;
+
+/// Drawing area handed to `init`: the character grid and the window size in pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct Size {
+    pub cols: usize,
+    pub rows: usize,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Size {
+    /// A `cols` x `rows` grid of nominal 8x16 px cells (tests and previews).
+    pub fn cells(cols: usize, rows: usize) -> Self {
+        Self {
+            cols,
+            rows,
+            width: cols as f32 * 8.0,
+            height: rows as f32 * 16.0,
+        }
+    }
+}
 
 pub trait Animation {
     fn name(&self) -> &'static str;
@@ -24,12 +50,21 @@ pub trait Animation {
     fn warm(&self) -> bool {
         false
     }
+    /// Frame rate this animation needs to look smooth; the config fps is raised to it.
+    fn min_fps(&self) -> u32 {
+        0
+    }
     /// Called once before the first `update`, and again on resize.
-    fn init(&mut self, cols: usize, rows: usize, seed: u64);
+    fn init(&mut self, size: Size, seed: u64);
     /// Advance simulation by `dt` seconds.
     fn update(&mut self, dt: f32);
-    /// Write the current frame into `grid` (which is `cols` x `rows` from `init`).
-    fn render(&self, grid: &mut Grid);
+    /// Write the current frame into `grid` (`size.cols` x `size.rows` from `init`).
+    /// Shape-only animations keep the default, which leaves the grid empty.
+    fn render(&self, grid: &mut Grid) {
+        grid.clear();
+    }
+    /// Append the current frame's vector shapes. Grid-only animations draw none.
+    fn draw(&self, _out: &mut Vec<Shape>) {}
 }
 
 /// (config name, menu label)
@@ -40,6 +75,8 @@ pub const ANIMATIONS: &[(&str, &str)] = &[
     ("waves", "Waves"),
     ("ripples", "Ripples"),
     ("wind", "Wind"),
+    ("constellation", "Constellation"),
+    ("flow", "Flow field"),
 ];
 
 /// Speed presets offered in the tray: (multiplier, menu label).
@@ -75,6 +112,8 @@ pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
         "waves" => Box::new(Waves::new()),
         "ripples" => Box::new(Ripples::new()),
         "wind" => Box::new(Wind::new()),
+        "constellation" => Box::new(Constellation::new()),
+        "flow" => Box::new(Flow::new()),
         _ => Box::new(Matrix::new()),
     }
 }
@@ -84,21 +123,32 @@ mod tests {
     use super::*;
 
     fn frame(name: &str, seed: u64) -> Grid {
+        frame_and_shapes(name, seed).0
+    }
+
+    fn frame_and_shapes(name: &str, seed: u64) -> (Grid, Vec<Shape>) {
         let mut a = by_name(name, " .:-=+*#%@");
         assert_eq!(a.name(), name);
-        a.init(60, 30, seed);
+        a.init(Size::cells(60, 30), seed);
         let mut g = Grid::new(60, 30);
         for _ in 0..48 {
             a.update(1.0 / 24.0);
         }
         a.render(&mut g);
-        g
+        let mut shapes = Vec::new();
+        a.draw(&mut shapes);
+        (g, shapes)
     }
 
     #[test]
     fn every_animation_draws_deterministically() {
         for &(name, _) in ANIMATIONS {
-            let g = frame(name, 42);
+            let (g, shapes) = frame_and_shapes(name, 42);
+            assert_eq!(
+                shapes,
+                frame_and_shapes(name, 42).1,
+                "{name} shapes not deterministic"
+            );
             assert_eq!(
                 g.to_text(),
                 frame(name, 42).to_text(),
@@ -108,7 +158,7 @@ mod tests {
                 .flat_map(|y| g.row(y).iter())
                 .filter(|c| c.brightness > 0 && c.ch != ' ')
                 .count();
-            assert!(lit > 0, "{name} drew nothing");
+            assert!(lit + shapes.len() > 0, "{name} drew nothing");
         }
     }
 

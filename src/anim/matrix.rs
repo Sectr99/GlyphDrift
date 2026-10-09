@@ -1,4 +1,4 @@
-use super::{rng::hash3, Animation, Rng};
+use super::{rng::hash3, Animation, Rng, Size};
 use crate::grid::{Cell, Grid};
 
 const GLYPHS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*+=<>?";
@@ -51,7 +51,8 @@ impl Animation for Matrix {
         "matrix"
     }
 
-    fn init(&mut self, cols: usize, rows: usize, seed: u64) {
+    fn init(&mut self, size: Size, seed: u64) {
+        let (cols, rows) = (size.cols, size.rows);
         self.rng = Rng::new(seed);
         self.rows = rows;
         self.tick = 0;
@@ -106,7 +107,7 @@ mod tests {
 
     fn frame(seed: u64) -> String {
         let mut a = Matrix::new();
-        a.init(20, 10, seed);
+        a.init(Size::cells(20, 10), seed);
         for _ in 0..30 {
             a.update(1.0 / 24.0);
         }

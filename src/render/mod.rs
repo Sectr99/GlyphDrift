@@ -9,6 +9,7 @@ use std::mem::ManuallyDrop;
 
 use crate::config::Rgb;
 use crate::grid::Grid;
+use crate::shape::Shape;
 use crate::theme;
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
@@ -16,7 +17,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush, D2D1_ELLIPSE,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
 };
@@ -76,6 +77,11 @@ impl Batch {
             ascenderOffset: -y,
         });
     }
+}
+
+/// Palette index for a 0..=255 brightness.
+fn level_index(brightness: u8) -> usize {
+    (brightness as usize * LEVELS / 256).min(LEVELS - 1)
 }
 
 fn color(c: Rgb) -> D2D1_COLOR_F {
@@ -169,12 +175,12 @@ impl Renderer {
         (self.cell_w, self.cell_h)
     }
 
-    /// Draw `grid` into `hdc` (a `width` x `height` client area).
-    pub fn paint(&mut self, hdc: HDC, width: i32, height: i32, grid: &Grid) {
+    /// Draw `grid`, then `shapes` on top, into `hdc` (a `width` x `height` client area).
+    pub fn paint(&mut self, hdc: HDC, width: i32, height: i32, grid: &Grid, shapes: &[Shape]) {
         if width <= 0 || height <= 0 {
             return;
         }
-        if let Err(e) = self.try_paint(hdc, width, height, grid) {
+        if let Err(e) = self.try_paint(hdc, width, height, grid, shapes) {
             if e.code() == D2DERR_RECREATE_TARGET {
                 self.target = None; // rebuilt on the next frame
             } else {
@@ -183,7 +189,14 @@ impl Renderer {
         }
     }
 
-    fn try_paint(&mut self, hdc: HDC, width: i32, height: i32, grid: &Grid) -> Result<()> {
+    fn try_paint(
+        &mut self,
+        hdc: HDC,
+        width: i32,
+        height: i32,
+        grid: &Grid,
+        shapes: &[Shape],
+    ) -> Result<()> {
         for b in &mut self.batches {
             b.clear();
         }
@@ -192,7 +205,7 @@ impl Renderer {
                 if cell.brightness == 0 || cell.ch == ' ' {
                     continue;
                 }
-                let level = (cell.brightness as usize * LEVELS / 256).min(LEVELS - 1);
+                let level = level_index(cell.brightness);
                 self.batches[level].push(
                     (x as i32 * self.cell_w) as f32,
                     (y as i32 * self.cell_h) as f32,
@@ -251,6 +264,29 @@ impl Renderer {
                 t.rt.DrawGlyphRun(origin, &run, brush, DWRITE_MEASURING_MODE_NATURAL);
                 // Release the reference taken by `clone` above.
                 drop(ManuallyDrop::into_inner(run.fontFace));
+            }
+            let pt = |p: (f32, f32)| D2D_POINT_2F { x: p.0, y: p.1 };
+            for s in shapes {
+                match *s {
+                    Shape::Line { a, b, width, level } if level > 0 => {
+                        let brush = &t.brushes[level_index(level)];
+                        t.rt.DrawLine(pt(a), pt(b), brush, width, None);
+                    }
+                    Shape::Circle { c, r, fill, level } if level > 0 => {
+                        let brush = &t.brushes[level_index(level)];
+                        let e = D2D1_ELLIPSE {
+                            point: pt(c),
+                            radiusX: r,
+                            radiusY: r,
+                        };
+                        if fill {
+                            t.rt.FillEllipse(&e, brush);
+                        } else {
+                            t.rt.DrawEllipse(&e, brush, 1.0, None);
+                        }
+                    }
+                    _ => {} // level 0 is invisible
+                }
             }
             t.rt.EndDraw(None, None)
         }

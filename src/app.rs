@@ -25,6 +25,7 @@ use crate::desktop;
 use crate::grid::Grid;
 use crate::power;
 use crate::render::Renderer;
+use crate::shape::Shape;
 use crate::theme::{self, THEMES};
 use crate::tray;
 
@@ -34,6 +35,7 @@ const PAUSED_INTERVAL_MS: u32 = 1000;
 struct App {
     cfg: Config,
     grid: Grid,
+    shapes: Vec<Shape>,
     anim: Box<dyn Animation>,
     renderer: Renderer,
     parent: HWND,
@@ -57,7 +59,7 @@ impl App {
         if self.paused() {
             PAUSED_INTERVAL_MS
         } else {
-            1000 / self.cfg.general.fps.max(1)
+            1000 / self.cfg.general.fps.max(self.anim.min_fps()).max(1)
         }
     }
 
@@ -71,8 +73,21 @@ impl App {
         let cols = (width / cw).max(1) as usize;
         let rows = (height / ch).max(1) as usize;
         self.grid.resize(cols, rows);
-        self.anim.init(cols, rows, self.seed);
+        let size = anim::Size {
+            cols,
+            rows,
+            width: width as f32,
+            height: height as f32,
+        };
+        self.anim.init(size, self.seed);
+        self.render_frame();
+    }
+
+    /// Capture the animation's current frame: grid cells plus vector shapes.
+    fn render_frame(&mut self) {
         self.anim.render(&mut self.grid);
+        self.shapes.clear();
+        self.anim.draw(&mut self.shapes);
     }
 
     /// Push the current theme's colors (warm or cool, per animation) to the renderer.
@@ -182,7 +197,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let dt = now.duration_since(app.last_frame).as_secs_f32().min(0.25);
                     app.last_frame = now;
                     app.anim.update(dt * app.cfg.general.speed);
-                    app.anim.render(&mut app.grid);
+                    app.render_frame();
                     let _ = InvalidateRect(hwnd, None, BOOL(0));
                 }
             }
@@ -192,7 +207,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if let Some(app) = app_of(hwnd) {
-                app.renderer.paint(hdc, app.width, app.height, &app.grid);
+                app.renderer
+                    .paint(hdc, app.width, app.height, &app.grid, &app.shapes);
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
@@ -219,6 +235,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.anim = anim::by_name(name, &app.cfg.theme.ramp);
                 app.resize(app.width, app.height); // re-inits and renders a first frame
                 app.apply_colors();
+                SetTimer(hwnd, TIMER_ID, app.interval_ms(), None); // frame rate may differ
                 save("general", "animation", name);
                 let _ = InvalidateRect(hwnd, None, BOOL(0));
             }
@@ -313,6 +330,7 @@ pub fn run() -> Result<()> {
         let app_ptr = Box::into_raw(Box::new(App {
             cfg,
             grid: Grid::new(1, 1),
+            shapes: Vec::new(),
             anim,
             renderer,
             parent,

@@ -1,6 +1,6 @@
 //! Raindrops on still water: rings that spread out and fade.
 
-use super::{Animation, Rng};
+use super::{Animation, Rng, Size};
 use crate::grid::{Cell, Grid};
 
 const SPEED: f32 = 5.0; // ring growth, cells per second
@@ -52,7 +52,8 @@ impl Animation for Ripples {
         "ripples"
     }
 
-    fn init(&mut self, cols: usize, rows: usize, seed: u64) {
+    fn init(&mut self, size: Size, seed: u64) {
+        let (cols, rows) = (size.cols, size.rows);
         self.cols = cols;
         self.rows = rows;
         self.rng = Rng::new(seed);

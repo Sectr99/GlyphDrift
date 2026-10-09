@@ -128,7 +128,7 @@ Character ramp for brightness mapping: `" .:-=+*#%@"` (configurable).
 **Targets**
 | Metric | Target |
 |---|---|
-| Working set | < 40 MB (Direct2D loads the GPU driver; GDI was ~10 MB but ~10x the CPU) |
+| Working set | < 50 MB (measured ~44 MB; nearly all GPU driver. GDI was ~10 MB but ~10x the CPU) |
 | CPU at 30 FPS (1080p) | < 2% on a modern CPU |
 | CPU when paused | ~0% |
 | Binary size | < 2 MB (release, stripped) |

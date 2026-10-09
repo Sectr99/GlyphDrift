@@ -1,4 +1,5 @@
-//! Built-in color themes, taken from the published palettes of popular editor themes.
+//! Built-in color themes: terminal classics, the published palettes of popular editor
+//! themes, and a couple of neon ones.
 //!
 //! Each theme has a background plus two three-stop gradients (dim to bright): `warm` for
 //! fire-like animations and `cool` for everything else. The renderer blends from the
@@ -9,6 +10,8 @@ use crate::config::Rgb;
 pub struct Theme {
     pub name: &'static str,
     pub label: &'static str,
+    /// Menu group; the tray separates groups.
+    pub group: &'static str,
     pub bg: Rgb,
     pub cool: [Rgb; 3],
     pub warm: [Rgb; 3],
@@ -19,10 +22,11 @@ const fn hex(v: u32) -> Rgb {
 }
 
 macro_rules! theme {
-    ($name:literal, $label:literal, $bg:literal, [$($c:literal),*], [$($w:literal),*]) => {
+    ($group:literal, $name:literal, $label:literal, $bg:literal, [$($c:literal),*], [$($w:literal),*]) => {
         Theme {
             name: $name,
             label: $label,
+            group: $group,
             bg: hex($bg),
             cool: [$(hex($c)),*],
             warm: [$(hex($w)),*],
@@ -31,7 +35,9 @@ macro_rules! theme {
 }
 
 pub const THEMES: &[Theme] = &[
+    // Green phosphor.
     theme!(
+        "terminal",
         "matrix",
         "Matrix",
         0x000000,
@@ -40,14 +46,25 @@ pub const THEMES: &[Theme] = &[
     ),
     // Pure black and white.
     theme!(
+        "terminal",
         "mono",
         "Mono",
         0x000000,
         [0x3c3c3c, 0x9a9a9a, 0xffffff],
         [0x3c3c3c, 0x9a9a9a, 0xffffff]
     ),
+    // Amber phosphor terminal.
+    theme!(
+        "terminal",
+        "amber",
+        "Amber CRT",
+        0x0a0600,
+        [0x5a3200, 0xc77800, 0xffb000],
+        [0x7a2400, 0xe06800, 0xffc040]
+    ),
     // base | blue, sapphire, sky | red, peach, yellow
     theme!(
+        "editor",
         "catppuccin-mocha",
         "Catppuccin Mocha",
         0x1e1e2e,
@@ -56,6 +73,7 @@ pub const THEMES: &[Theme] = &[
     ),
     // bg | blue, cyan, fg | red, orange, yellow
     theme!(
+        "editor",
         "tokyo-night",
         "Tokyo Night",
         0x1a1b26,
@@ -64,6 +82,7 @@ pub const THEMES: &[Theme] = &[
     ),
     // nord0 | nord10, nord9, nord8 | nord11, nord12, nord13
     theme!(
+        "editor",
         "nord",
         "Nord",
         0x2e3440,
@@ -72,6 +91,7 @@ pub const THEMES: &[Theme] = &[
     ),
     // bg | blue, bright blue, bright aqua | red, bright orange, bright yellow
     theme!(
+        "editor",
         "gruvbox",
         "Gruvbox Dark",
         0x282828,
@@ -80,6 +100,7 @@ pub const THEMES: &[Theme] = &[
     ),
     // bg | comment, purple, cyan | red, orange, yellow
     theme!(
+        "editor",
         "dracula",
         "Dracula",
         0x282a36,
@@ -88,6 +109,7 @@ pub const THEMES: &[Theme] = &[
     ),
     // base | pine, foam, text | love, rose, gold
     theme!(
+        "editor",
         "rose-pine",
         "Rosé Pine",
         0x191724,
@@ -96,6 +118,7 @@ pub const THEMES: &[Theme] = &[
     ),
     // sumiInk1 | crystalBlue, springBlue, fujiWhite | autumnRed, surimiOrange, carpYellow
     theme!(
+        "editor",
         "kanagawa",
         "Kanagawa",
         0x1f1f28,
@@ -104,6 +127,7 @@ pub const THEMES: &[Theme] = &[
     ),
     // bg | purple, blue, cyan | red, orange, yellow
     theme!(
+        "editor",
         "one-dark",
         "One Dark",
         0x282c34,
@@ -112,14 +136,97 @@ pub const THEMES: &[Theme] = &[
     ),
     // base03 | blue, cyan, base1 | red, orange, yellow
     theme!(
+        "editor",
         "solarized-dark",
         "Solarized Dark",
         0x002b36,
         [0x268bd2, 0x2aa198, 0x93a1a1],
         [0xdc322f, 0xcb4b16, 0xb58900]
     ),
-    // Claude: slate | book cloth, coral, ivory | error red, coral, manilla
+    // bg | blue, aqua, fg | red, orange, yellow
     theme!(
+        "editor",
+        "everforest",
+        "Everforest",
+        0x2d353b,
+        [0x7fbbb3, 0x83c092, 0xd3c6aa],
+        [0xe67e80, 0xe69875, 0xdbbc7f]
+    ),
+    // bg | purple, blue, green | pink, orange, yellow
+    theme!(
+        "editor",
+        "monokai",
+        "Monokai",
+        0x272822,
+        [0xae81ff, 0x66d9ef, 0xa6e22e],
+        [0xf92672, 0xfd971f, 0xe6db74]
+    ),
+    // bg | entity blue, regexp cyan, fg | markup red, keyword orange, func yellow
+    theme!(
+        "editor",
+        "ayu-dark",
+        "Ayu Dark",
+        0x0b0e14,
+        [0x39bae6, 0x95e6cb, 0xbfbdb6],
+        [0xf07178, 0xff8f40, 0xffb454]
+    ),
+    // bg | blue, cyan, fg | red, orange, yellow
+    theme!(
+        "editor",
+        "night-owl",
+        "Night Owl",
+        0x011627,
+        [0x82aaff, 0x7fdbca, 0xd6deeb],
+        [0xef5350, 0xf78c6c, 0xecc48d]
+    ),
+    // bg | purple, blue, cyan | red, orange, yellow
+    theme!(
+        "editor",
+        "palenight",
+        "Palenight",
+        0x292d3e,
+        [0xc792ea, 0x82aaff, 0x89ddff],
+        [0xf07178, 0xf78c6c, 0xffcb6b]
+    ),
+    // canvas | blue, light blue, fg | red, orange, yellow
+    theme!(
+        "editor",
+        "github-dark",
+        "GitHub Dark",
+        0x0d1117,
+        [0x58a6ff, 0x79c0ff, 0xc9d1d9],
+        [0xff7b72, 0xffa657, 0xd29922]
+    ),
+    // bg | blue, sky, cyan | magenta, pink, purple (no orange in the palette)
+    theme!(
+        "editor",
+        "oxocarbon",
+        "Oxocarbon",
+        0x161616,
+        [0x78a9ff, 0x33b1ff, 0x3ddbd9],
+        [0xee5396, 0xff7eb6, 0xbe95ff]
+    ),
+    // bg | teal, cyan, blue | red, pink, yellow
+    theme!(
+        "editor",
+        "poimandres",
+        "Poimandres",
+        0x1b1e28,
+        [0x5de4c7, 0x89ddff, 0xadd7ff],
+        [0xd0679d, 0xfcc5e9, 0xfffac2]
+    ),
+    // bg | purple, pink, cyan | red, orange, yellow
+    theme!(
+        "neon",
+        "synthwave-84",
+        "Synthwave '84",
+        0x262335,
+        [0xb893ce, 0xff7edb, 0x36f9f6],
+        [0xfe4450, 0xf97e72, 0xfede5d]
+    ),
+    // slate | book cloth, coral, ivory | error red, coral, manilla
+    theme!(
+        "neon",
         "claude",
         "Claude",
         0x262624,

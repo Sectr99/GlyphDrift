@@ -9,6 +9,7 @@ mod matrix;
 mod plasma;
 mod ripples;
 mod rng;
+mod skull;
 mod waves;
 mod wind;
 
@@ -20,6 +21,7 @@ pub use matrix::Matrix;
 pub use plasma::Plasma;
 pub use ripples::Ripples;
 pub use rng::Rng;
+pub use skull::Skull;
 pub use waves::Waves;
 pub use wind::Wind;
 
@@ -87,6 +89,7 @@ pub const ANIMATIONS: &[(&str, &str, &str)] = &[
     ("orb", "Striped orb", "loops"),
     ("sunburst", "Sunburst", "loops"),
     ("moon", "Moon", "loops"),
+    ("skull", "Skull", "loops"),
 ];
 
 /// Speed presets offered in the tray: (multiplier, menu label).
@@ -138,6 +141,7 @@ pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
         "orb" => Box::new(Orb::new()),
         "sunburst" => Box::new(Sunburst::new()),
         "moon" => Box::new(Moon::new()),
+        "skull" => Box::new(Skull::new()),
         _ => Box::new(Matrix::new()),
     }
 }

@@ -37,15 +37,15 @@ impl Clock {
 const FILL: f32 = 150.0;
 
 /// Line-weight tiers in px at a 1000 px screen; `Pen` scales them to the real size.
-const HERO: f32 = 2.4;
-const MID: f32 = 1.3;
-const HAIR: f32 = 0.55;
+pub(super) const HERO: f32 = 2.4;
+pub(super) const MID: f32 = 1.3;
+pub(super) const HAIR: f32 = 0.55;
 
 /// Light direction on screen (upper left), unit length.
-const LIGHT_2D: (f32, f32) = (-0.6, -0.8);
+pub(super) const LIGHT_2D: (f32, f32) = (-0.6, -0.8);
 
 /// Smoothstep ease, 0..1 -> 0..1 with zero velocity at both ends.
-fn ease(x: f32) -> f32 {
+pub(super) fn ease(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
 }
@@ -64,7 +64,7 @@ fn anchor(w: f32, h: f32) -> ((f32, f32), f32) {
 }
 
 /// Horizontally centered, slightly high so the object doesn't appear to sag.
-fn optical_center(w: f32, h: f32) -> ((f32, f32), f32) {
+pub(super) fn optical_center(w: f32, h: f32) -> ((f32, f32), f32) {
     ((w * 0.5, h * 0.47), w.min(h))
 }
 
@@ -94,18 +94,25 @@ fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
 
 /// Resolution-aware drawing: weights and spacings are given at a 1000 px screen.
 #[derive(Clone, Copy)]
-struct Pen(f32);
+pub(super) struct Pen(f32);
 
 impl Pen {
-    fn new(unit: f32) -> Self {
+    pub(super) fn new(unit: f32) -> Self {
         Pen((unit / 1000.0).max(0.75))
     }
 
-    fn px(self, v: f32) -> f32 {
+    pub(super) fn px(self, v: f32) -> f32 {
         v * self.0
     }
 
-    fn line(self, out: &mut Vec<Shape>, a: (f32, f32), b: (f32, f32), weight: f32, level: u8) {
+    pub(super) fn line(
+        self,
+        out: &mut Vec<Shape>,
+        a: (f32, f32),
+        b: (f32, f32),
+        weight: f32,
+        level: u8,
+    ) {
         out.push(Shape::Line {
             a,
             b,
@@ -114,14 +121,14 @@ impl Pen {
         });
     }
 
-    fn path(self, out: &mut Vec<Shape>, pts: &[(f32, f32)], weight: f32, level: u8) {
+    pub(super) fn path(self, out: &mut Vec<Shape>, pts: &[(f32, f32)], weight: f32, level: u8) {
         for s in pts.windows(2) {
             self.line(out, s[0], s[1], weight, level);
         }
     }
 
     /// Dashed polyline; the dash pattern runs continuously across vertices.
-    fn dashed(
+    pub(super) fn dashed(
         self,
         out: &mut Vec<Shape>,
         pts: &[(f32, f32)],
@@ -159,7 +166,7 @@ impl Pen {
     }
 
     /// Dots spaced evenly along a polyline.
-    fn dotted(
+    pub(super) fn dotted(
         self,
         out: &mut Vec<Shape>,
         pts: &[(f32, f32)],
@@ -185,7 +192,7 @@ impl Pen {
         }
     }
 
-    fn dot(self, out: &mut Vec<Shape>, c: (f32, f32), radius: f32, level: u8) {
+    pub(super) fn dot(self, out: &mut Vec<Shape>, c: (f32, f32), radius: f32, level: u8) {
         out.push(Shape::Circle {
             c,
             r: self.px(radius),
@@ -196,7 +203,14 @@ impl Pen {
 
     /// Circle outline whose weight follows the light: HERO where lit, HAIR in shadow.
     /// `strength` (0..1) scales the lit side, e.g. for a thin crescent.
-    fn rim(self, out: &mut Vec<Shape>, c: (f32, f32), r: f32, light: (f32, f32), strength: f32) {
+    pub(super) fn rim(
+        self,
+        out: &mut Vec<Shape>,
+        c: (f32, f32),
+        r: f32,
+        light: (f32, f32),
+        strength: f32,
+    ) {
         const SEG: usize = 128;
         for i in 0..SEG {
             let (a0, a1) = (
@@ -219,7 +233,7 @@ impl Pen {
     }
 
     /// Soft shadow as halftone texture: staggered dots in an ellipse, shrinking to the rim.
-    fn halftone(self, out: &mut Vec<Shape>, c: (f32, f32), rx: f32, ry: f32, level: u8) {
+    pub(super) fn halftone(self, out: &mut Vec<Shape>, c: (f32, f32), rx: f32, ry: f32, level: u8) {
         let step = self.px(7.0);
         let (nx, ny) = ((rx / step) as i32 + 1, (ry / step) as i32 + 1);
         for j in -ny..=ny {

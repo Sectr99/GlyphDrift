@@ -207,7 +207,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Animation"));
                 }
-                let themes = crate::theme::THEMES.iter().map(|t| (t.label, ""));
+                let themes = crate::theme::THEMES.iter().map(|t| (t.label, t.group));
                 if let Some(sub) = radio_submenu(themes, ID_THEME_BASE, theme_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Theme"));
                 }

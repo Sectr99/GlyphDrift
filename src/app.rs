@@ -25,6 +25,7 @@ use crate::desktop;
 use crate::grid::Grid;
 use crate::power;
 use crate::render::Renderer;
+use crate::theme::{self, THEMES};
 use crate::tray;
 
 const TIMER_ID: usize = 1;
@@ -70,6 +71,13 @@ impl App {
         self.grid.resize(cols, rows);
         self.anim.init(cols, rows, self.seed);
         self.anim.render(&mut self.grid);
+    }
+
+    /// Push the current theme's colors (warm or cool, per animation) to the renderer.
+    fn apply_colors(&mut self) {
+        let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
+        let stops = if self.anim.warm() { &t.warm } else { &t.cool };
+        self.renderer.set_colors(t.bg, stops, self.cfg.theme.glass);
     }
 
     /// Re-evaluate pause state; returns true if the timer interval needs to change.
@@ -122,7 +130,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let now = Instant::now();
                     let dt = now.duration_since(app.last_frame).as_secs_f32().min(0.25);
                     app.last_frame = now;
-                    app.anim.update(dt);
+                    app.anim.update(dt * app.cfg.general.speed);
                     app.anim.render(&mut app.grid);
                     let _ = InvalidateRect(hwnd, None, BOOL(0));
                 }
@@ -142,6 +150,51 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_DISPLAYCHANGE => {
             if let Some(app) = app_of(hwnd) {
                 on_display_change(hwnd, app);
+            }
+            LRESULT(0)
+        }
+        tray::WM_GET_STATE => match app_of(hwnd) {
+            Some(app) => LRESULT(tray::pack_state(
+                anim::index_of(&app.cfg.general.animation),
+                theme::index_of(&app.cfg.theme.name),
+                anim::nearest(anim::SPEEDS, app.cfg.general.speed),
+                anim::nearest(theme::GLASS, app.cfg.theme.glass),
+            )),
+            None => LRESULT(0),
+        },
+        tray::WM_SET_ANIMATION => {
+            if let (Some(app), Some(&(name, _))) = (app_of(hwnd), anim::ANIMATIONS.get(wp.0)) {
+                app.cfg.general.animation = name.into();
+                app.anim = anim::by_name(name, &app.cfg.theme.ramp);
+                app.resize(app.width, app.height); // re-inits and renders a first frame
+                app.apply_colors();
+                save("general", "animation", name);
+                let _ = InvalidateRect(hwnd, None, BOOL(0));
+            }
+            LRESULT(0)
+        }
+        tray::WM_SET_THEME => {
+            if let (Some(app), Some(t)) = (app_of(hwnd), THEMES.get(wp.0)) {
+                app.cfg.theme.name = t.name.into();
+                app.apply_colors();
+                save("theme", "name", t.name);
+                let _ = InvalidateRect(hwnd, None, BOOL(0));
+            }
+            LRESULT(0)
+        }
+        tray::WM_SET_GLASS => {
+            if let (Some(app), Some(&(glass, _))) = (app_of(hwnd), theme::GLASS.get(wp.0)) {
+                app.cfg.theme.glass = glass;
+                app.apply_colors();
+                save("theme", "glass", glass as f64);
+                let _ = InvalidateRect(hwnd, None, BOOL(0));
+            }
+            LRESULT(0)
+        }
+        tray::WM_SET_SPEED => {
+            if let (Some(app), Some(&(speed, _))) = (app_of(hwnd), anim::SPEEDS.get(wp.0)) {
+                app.cfg.general.speed = speed;
+                save("general", "speed", speed as f64);
             }
             LRESULT(0)
         }
@@ -165,6 +218,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
+/// Persist a tray choice; failure only costs the setting surviving a restart.
+fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
+    if let Err(e) = config::save(section, key, value) {
+        eprintln!("config: could not save {section}.{key}: {e}");
+    }
+}
+
 unsafe fn on_display_change(hwnd: HWND, app: &App) {
     desktop::place(hwnd, app.parent);
 }
@@ -180,13 +240,15 @@ pub fn run() -> Result<()> {
         eprintln!("config: {w}");
     }
 
+    let anim = anim::by_name(&cfg.general.animation, &cfg.theme.ramp);
+    let t = &THEMES[theme::index_of(&cfg.theme.name)];
     let renderer = Renderer::new(
         &cfg.font.family,
         cfg.font.size,
-        cfg.foreground(),
-        cfg.background(),
+        t.bg,
+        if anim.warm() { &t.warm } else { &t.cool },
+        cfg.theme.glass,
     )?;
-    let anim = anim::by_name(&cfg.general.animation, &cfg.theme.ramp);
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)

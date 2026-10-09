@@ -9,6 +9,7 @@ use std::mem::ManuallyDrop;
 
 use crate::config::Rgb;
 use crate::grid::Grid;
+use crate::theme;
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -87,7 +88,13 @@ fn color(c: Rgb) -> D2D1_COLOR_F {
 }
 
 impl Renderer {
-    pub fn new(family: &str, pixel_height: i32, fg: Rgb, bg: Rgb) -> Result<Self> {
+    pub fn new(
+        family: &str,
+        pixel_height: i32,
+        bg: Rgb,
+        stops: &[Rgb; 3],
+        glass: f32,
+    ) -> Result<Self> {
         // SAFETY: factory/font calls with valid arguments; every out-pointer is a live local.
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
@@ -127,33 +134,35 @@ impl Renderer {
             let mut gm = DWRITE_GLYPH_METRICS::default();
             face.GetDesignGlyphMetrics(&glyph, 1, &mut gm, false)?;
 
-            let fg = color(fg);
-            let bg = color(bg);
-            let mut palette = [bg; LEVELS];
-            for (i, slot) in palette.iter_mut().enumerate() {
-                let k = (i + 1) as f32 / LEVELS as f32;
-                let mix = |f: f32, b: f32| b + (f - b) * k;
-                *slot = D2D1_COLOR_F {
-                    r: mix(fg.r, bg.r),
-                    g: mix(fg.g, bg.g),
-                    b: mix(fg.b, bg.b),
-                    a: 1.0,
-                };
-            }
-
-            Ok(Self {
+            let mut r = Self {
                 factory,
                 face,
                 em,
                 baseline: m.ascent as f32 * scale,
                 cell_w: ((gm.advanceWidth as f32 * scale).round() as i32).max(1),
                 cell_h: (((m.ascent + m.descent) as f32 * scale).ceil() as i32).max(1),
-                bg,
-                palette,
+                bg: color(bg),
+                palette: [color(bg); LEVELS],
                 target: None,
                 batches: Default::default(),
-            })
+            };
+            r.set_colors(bg, stops, glass);
+            Ok(r)
         }
+    }
+
+    /// Background plus three gradient stops (dim to bright), e.g. from `theme::THEMES`,
+    /// seen through a frosted veil of opacity `glass` (0 = none).
+    pub fn set_colors(&mut self, bg: Rgb, stops: &[Rgb; 3], glass: f32) {
+        self.bg = color(theme::frost(bg, bg, glass));
+        for (slot, c) in self
+            .palette
+            .iter_mut()
+            .zip(theme::gradient(bg, stops, LEVELS))
+        {
+            *slot = color(theme::frost(c, bg, glass));
+        }
+        self.target = None; // brushes are rebuilt with the new palette
     }
 
     pub fn cell_size(&self) -> (i32, i32) {

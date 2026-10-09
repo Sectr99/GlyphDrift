@@ -23,6 +23,8 @@ impl Rgb {
 pub struct General {
     pub fps: u32,
     pub animation: String,
+    /// Animation speed multiplier.
+    pub speed: f32,
     pub pause_on_fullscreen: bool,
 }
 
@@ -36,9 +38,11 @@ pub struct Font {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct Theme {
-    pub foreground: String,
-    pub background: String,
+    /// One of `theme::THEMES`.
+    pub name: String,
     pub ramp: String,
+    /// Frosted veil opacity over the animation, for legible desktop icon labels.
+    pub glass: f32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -54,6 +58,7 @@ impl Default for General {
         Self {
             fps: 24,
             animation: "matrix".into(),
+            speed: 1.0,
             pause_on_fullscreen: true,
         }
     }
@@ -71,8 +76,8 @@ impl Default for Font {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            foreground: "#00ff66".into(),
-            background: "#000000".into(),
+            name: "matrix".into(),
+            glass: 0.0,
             ramp: " .:-=+*#%@".into(),
         }
     }
@@ -102,6 +107,30 @@ impl Config {
             ));
             self.general.fps = fps;
         }
+        let speed = if self.general.speed.is_finite() {
+            self.general.speed.clamp(0.1, 4.0)
+        } else {
+            1.0
+        };
+        if speed != self.general.speed {
+            w.push(format!(
+                "speed {} out of range, using {speed}",
+                self.general.speed
+            ));
+            self.general.speed = speed;
+        }
+        let glass = if self.theme.glass.is_finite() {
+            self.theme.glass.clamp(0.0, 0.9)
+        } else {
+            0.0
+        };
+        if glass != self.theme.glass {
+            w.push(format!(
+                "glass {} out of range, using {glass}",
+                self.theme.glass
+            ));
+            self.theme.glass = glass;
+        }
         let size = self.font.size.clamp(6, 96);
         if size != self.font.size {
             w.push(format!(
@@ -110,7 +139,10 @@ impl Config {
             ));
             self.font.size = size;
         }
-        if !super::anim::NAMES.contains(&self.general.animation.as_str()) {
+        if !super::anim::ANIMATIONS
+            .iter()
+            .any(|a| a.0 == self.general.animation)
+        {
             w.push(format!(
                 "unknown animation '{}', using matrix",
                 self.general.animation
@@ -118,27 +150,47 @@ impl Config {
             self.general.animation = "matrix".into();
         }
         let d = Theme::default();
-        if Rgb::parse(&self.theme.foreground).is_none() {
-            w.push(format!("bad foreground color '{}'", self.theme.foreground));
-            self.theme.foreground = d.foreground;
-        }
-        if Rgb::parse(&self.theme.background).is_none() {
-            w.push(format!("bad background color '{}'", self.theme.background));
-            self.theme.background = d.background;
+        if !super::theme::THEMES
+            .iter()
+            .any(|t| t.name == self.theme.name)
+        {
+            w.push(format!("unknown theme '{}', using matrix", self.theme.name));
+            self.theme.name = d.name;
         }
         if self.theme.ramp.chars().count() < 2 || !self.theme.ramp.is_ascii() {
             w.push("ramp must be 2+ ASCII characters, using default".into());
             self.theme.ramp = d.ramp;
         }
     }
+}
 
-    pub fn foreground(&self) -> Rgb {
-        Rgb::parse(&self.theme.foreground).unwrap_or(Rgb(0, 255, 102))
-    }
+/// Set `[section] key = value` in `text`, keeping everything else (comments included).
+pub fn set_value(
+    text: &str,
+    section: &str,
+    key: &str,
+    value: impl Into<toml_edit::Value>,
+) -> Result<String, String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
+    let table = doc
+        .entry(section)
+        .or_insert_with(toml_edit::table)
+        .as_table_mut()
+        .ok_or_else(|| format!("[{section}] is not a table"))?;
+    table[key] = toml_edit::value(value);
+    Ok(doc.to_string())
+}
 
-    pub fn background(&self) -> Rgb {
-        Rgb::parse(&self.theme.background).unwrap_or(Rgb(0, 0, 0))
+/// Persist one setting to the config file, creating it if needed. A config file that
+/// doesn't parse is left untouched rather than overwritten.
+pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Result<(), String> {
+    let path = default_path().ok_or("APPDATA not set")?;
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let out = set_value(&text, section, key, value)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{e}"))?;
     }
+    std::fs::write(&path, out).map_err(|e| format!("{e}"))
 }
 
 /// `%APPDATA%\ascii-wallpaper\config.toml`
@@ -168,19 +220,20 @@ mod tests {
         let (c, w) = Config::from_toml("");
         assert!(w.is_empty());
         assert_eq!(c.general.fps, 24);
-        assert_eq!(c.foreground(), Rgb(0, 0xff, 0x66));
+        assert_eq!(c.theme.name, "matrix");
     }
 
     #[test]
     fn clamps_and_falls_back() {
         let (c, w) = Config::from_toml(
-            "[general]\nfps = 500\nanimation = \"nope\"\n[theme]\nforeground = \"green\"\nramp = \"x\"\n",
+            "[general]\nfps = 500\nspeed = -1.0\nanimation = \"nope\"\n[theme]\nname = \"nope\"\nramp = \"x\"\n",
         );
         assert_eq!(c.general.fps, 60);
+        assert_eq!(c.general.speed, 0.1);
         assert_eq!(c.general.animation, "matrix");
-        assert_eq!(c.foreground(), Rgb(0, 0xff, 0x66));
+        assert_eq!(c.theme.name, "matrix");
         assert_eq!(c.theme.ramp, " .:-=+*#%@");
-        assert_eq!(w.len(), 4);
+        assert_eq!(w.len(), 5);
     }
 
     #[test]
@@ -195,6 +248,21 @@ mod tests {
         let text = include_str!("../../config.example.toml");
         let (_, w) = Config::from_toml(text);
         assert!(w.is_empty(), "{w:?}");
+    }
+
+    #[test]
+    fn set_value_keeps_comments_and_adds_sections() {
+        let text = "# mine\n[general]\nfps = 30 # smooth\n";
+        let out = set_value(text, "theme", "name", "nord").unwrap();
+        assert!(
+            out.contains("# mine") && out.contains("fps = 30 # smooth"),
+            "{out}"
+        );
+        let out = set_value(&out, "theme", "name", "dracula").unwrap();
+        let (c, w) = Config::from_toml(&out);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!((c.general.fps, c.theme.name.as_str()), (30, "dracula"));
+        assert!(set_value("[broken", "theme", "name", "x").is_err());
     }
 
     #[test]

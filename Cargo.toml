@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+toml_edit = "0.22" # already in the tree via toml; edits config.toml keeping comments
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.58"

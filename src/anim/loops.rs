@@ -56,9 +56,16 @@ fn ramp(a: f32, b: f32, x: f32) -> f32 {
 }
 
 /// Anchor for single-object loops: a little right of center, clear of the desktop icons on
-/// the left, and slightly high (the optical center).
+/// the left, and slightly high (the optical center). Only for compositions with something
+/// asymmetric to balance the shift (the globe's guide arc and orbit); balanced ones use
+/// `optical_center`, since an unjustified offset reads as a mistake.
 fn anchor(w: f32, h: f32) -> ((f32, f32), f32) {
     ((w * 0.56, h * 0.47), w.min(h))
+}
+
+/// Horizontally centered, slightly high so the object doesn't appear to sag.
+fn optical_center(w: f32, h: f32) -> ((f32, f32), f32) {
+    ((w * 0.5, h * 0.47), w.min(h))
 }
 
 /// Rotate screen offset (dx, dy) by `angle` about `c`.
@@ -613,7 +620,7 @@ impl Cubes {
         ];
         let light = V3::new(-0.45, -0.7, 0.55);
         let Clock { t, w, h } = self.0;
-        let (c, unit) = anchor(w, h);
+        let (c, unit) = optical_center(w, h);
         let pen = Pen::new(unit);
         let s = unit * 0.12;
         let step = (t / PERIOD).floor();
@@ -692,7 +699,7 @@ impl Orb {
         const CELLS: usize = 16; // latitude cells per stripe: enough to hide banding
         const EDGE: usize = 3; // points per cell edge
         let Clock { t, w, h } = self.0;
-        let (c, unit) = anchor(w, h);
+        let (c, unit) = optical_center(w, h);
         let pen = Pen::new(unit);
         let r = unit * 0.24;
         let roll = 0.35 + 0.05 * (t * 0.2).sin();
@@ -756,7 +763,7 @@ impl Sunburst {
     fn frame(&self, out: &mut Vec<Shape>) {
         const RAYS: usize = 240;
         let Clock { t, w, h } = self.0;
-        let (c, unit) = anchor(w, h);
+        let (c, unit) = optical_center(w, h);
         let pen = Pen::new(unit);
         let (r_in, reach) = (unit * 0.12, unit * 0.13);
         let spin = t * 0.04;
@@ -808,7 +815,7 @@ impl Moon {
             (0.42, 0.35, 0.14),
         ];
         let Clock { t, w, h } = self.0;
-        let (c, unit) = anchor(w, h);
+        let (c, unit) = optical_center(w, h);
         let pen = Pen::new(unit);
         let r = unit * 0.2;
 

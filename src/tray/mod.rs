@@ -58,15 +58,21 @@ fn unpack_state(v: isize) -> [usize; 5] {
     std::array::from_fn(|i| (v as usize >> (8 * i)) & 0xFF)
 }
 
-/// Submenu of radio items `base + i` labelled `labels`, with `checked` marked.
-unsafe fn radio_submenu(
-    labels: impl Iterator<Item = &'static str>,
+/// Submenu of radio items `base + i`, with `checked` marked. Each item is (label, group);
+/// a separator goes wherever the group changes.
+unsafe fn radio_submenu<'a>(
+    items: impl Iterator<Item = (&'a str, &'a str)>,
     base: usize,
     checked: usize,
 ) -> Option<HMENU> {
     let sub = CreatePopupMenu().ok()?;
     let mut n = 0;
-    for label in labels {
+    let mut group = None;
+    for (label, g) in items {
+        if group.is_some_and(|prev| prev != g) {
+            let _ = AppendMenuW(sub, MF_SEPARATOR, 0, None);
+        }
+        group = Some(g);
         let _ = AppendMenuW(sub, MF_STRING, base + n, &HSTRING::from(label));
         n += 1;
     }
@@ -197,23 +203,23 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             if let Ok(menu) = CreatePopupMenu() {
                 let [anim_i, theme_i, speed_i, glass_i, fps_i] =
                     unpack_state(SendMessageW(target, WM_GET_STATE, WPARAM(0), LPARAM(0)).0);
-                let anims = crate::anim::ANIMATIONS.iter().map(|a| a.1);
+                let anims = crate::anim::ANIMATIONS.iter().map(|a| (a.1, a.2));
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Animation"));
                 }
-                let themes = crate::theme::THEMES.iter().map(|t| t.label);
+                let themes = crate::theme::THEMES.iter().map(|t| (t.label, ""));
                 if let Some(sub) = radio_submenu(themes, ID_THEME_BASE, theme_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Theme"));
                 }
-                let speeds = crate::anim::SPEEDS.iter().map(|s| s.1);
+                let speeds = crate::anim::SPEEDS.iter().map(|s| (s.1, ""));
                 if let Some(sub) = radio_submenu(speeds, ID_SPEED_BASE, speed_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Speed"));
                 }
-                let glass = crate::theme::GLASS.iter().map(|g| g.1);
+                let glass = crate::theme::GLASS.iter().map(|g| (g.1, ""));
                 if let Some(sub) = radio_submenu(glass, ID_GLASS_BASE, glass_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Glass"));
                 }
-                let rates = crate::anim::FRAME_RATES.iter().map(|r| r.1);
+                let rates = crate::anim::FRAME_RATES.iter().map(|r| (r.1, ""));
                 if let Some(sub) = radio_submenu(rates, ID_FPS_BASE, fps_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Frame rate"));
                 }

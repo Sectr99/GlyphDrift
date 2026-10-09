@@ -278,7 +278,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             None => LRESULT(0),
         },
         tray::WM_SET_ANIMATION => {
-            if let (Some(app), Some(&(name, _))) = (app_of(hwnd), anim::ANIMATIONS.get(wp.0)) {
+            if let (Some(app), Some(&(name, ..))) = (app_of(hwnd), anim::ANIMATIONS.get(wp.0)) {
                 app.cfg.general.animation = name.into();
                 app.anim = anim::by_name(name, &app.cfg.theme.ramp);
                 app.resize(app.width, app.height); // re-inits and renders a first frame

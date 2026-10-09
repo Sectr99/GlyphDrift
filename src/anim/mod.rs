@@ -15,7 +15,7 @@ mod wind;
 pub use constellation::Constellation;
 pub use fire::Fire;
 pub use flow::Flow;
-pub use loops::{Cubes, DotWave, Globe, Helix};
+pub use loops::{Cubes, DotWave, Globe, Helix, Moon, Orb, Sunburst};
 pub use matrix::Matrix;
 pub use plasma::Plasma;
 pub use ripples::Ripples;
@@ -70,20 +70,23 @@ pub trait Animation {
     fn draw(&self, _out: &mut Vec<Shape>) {}
 }
 
-/// (config name, menu label)
-pub const ANIMATIONS: &[(&str, &str)] = &[
-    ("matrix", "Matrix rain"),
-    ("plasma", "Plasma"),
-    ("fire", "Fire"),
-    ("waves", "Waves"),
-    ("ripples", "Ripples"),
-    ("wind", "Wind"),
-    ("constellation", "Constellation"),
-    ("flow", "Flow field"),
-    ("helix", "Helix"),
-    ("globe", "Wire globe"),
-    ("dotwave", "Dot wave"),
-    ("cubes", "Cubes"),
+/// (config name, menu label, menu group); the tray separates groups.
+pub const ANIMATIONS: &[(&str, &str, &str)] = &[
+    ("matrix", "Matrix rain", "ascii"),
+    ("plasma", "Plasma", "ascii"),
+    ("fire", "Fire", "ascii"),
+    ("waves", "Waves", "ascii"),
+    ("ripples", "Ripples", "ascii"),
+    ("wind", "Wind", "ascii"),
+    ("constellation", "Constellation", "graphics"),
+    ("flow", "Flow field", "graphics"),
+    ("helix", "Helix", "loops"),
+    ("globe", "Wire globe", "loops"),
+    ("dotwave", "Dot wave", "loops"),
+    ("cubes", "Cubes", "loops"),
+    ("orb", "Striped orb", "loops"),
+    ("sunburst", "Sunburst", "loops"),
+    ("moon", "Moon", "loops"),
 ];
 
 /// Speed presets offered in the tray: (multiplier, menu label).
@@ -132,6 +135,9 @@ pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
         "globe" => Box::new(Globe::new()),
         "dotwave" => Box::new(DotWave::new()),
         "cubes" => Box::new(Cubes::new()),
+        "orb" => Box::new(Orb::new()),
+        "sunburst" => Box::new(Sunburst::new()),
+        "moon" => Box::new(Moon::new()),
         _ => Box::new(Matrix::new()),
     }
 }
@@ -160,7 +166,7 @@ mod tests {
 
     #[test]
     fn every_animation_draws_deterministically() {
-        for &(name, _) in ANIMATIONS {
+        for &(name, ..) in ANIMATIONS {
             let (g, shapes) = frame_and_shapes(name, 42);
             assert_eq!(
                 shapes,
@@ -177,6 +183,30 @@ mod tests {
                 .filter(|c| c.brightness > 0 && c.ch != ' ')
                 .count();
             assert!(lit + shapes.len() > 0, "{name} drew nothing");
+        }
+    }
+
+    #[test]
+    fn every_animation_stays_bounded_at_4k() {
+        // Small test grids once hid a draw loop that never ended at full-screen coordinates.
+        let size = Size {
+            cols: 480,
+            rows: 135,
+            width: 3840.0,
+            height: 2160.0,
+        };
+        for &(name, ..) in ANIMATIONS {
+            let mut a = by_name(name, " .:-=+*#%@");
+            a.init(size, 9);
+            let mut g = Grid::new(size.cols, size.rows);
+            let mut shapes = Vec::new();
+            for _ in 0..3 {
+                a.update(7.3); // big steps reach late loop phases quickly
+                a.render(&mut g);
+                shapes.clear();
+                a.draw(&mut shapes);
+                assert!(shapes.len() < 100_000, "{name}: {} shapes", shapes.len());
+            }
         }
     }
 

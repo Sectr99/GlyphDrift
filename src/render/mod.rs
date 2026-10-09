@@ -14,7 +14,8 @@ use crate::theme;
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,
+    D2D1_PIXEL_FORMAT, D2D_POINT_2F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush, D2D1_ELLIPSE,
@@ -268,6 +269,18 @@ impl Renderer {
             let pt = |p: (f32, f32)| D2D_POINT_2F { x: p.0, y: p.1 };
             for s in shapes {
                 match *s {
+                    Shape::Polygon { ref points, level } if level > 0 && points.len() >= 3 => {
+                        // ponytail: one path geometry per polygon per frame; cache if a
+                        // loop ever needs hundreds of fills.
+                        let geom = self.factory.CreatePathGeometry()?;
+                        let sink = geom.Open()?;
+                        sink.BeginFigure(pt(points[0]), D2D1_FIGURE_BEGIN_FILLED);
+                        let rest: Vec<_> = points[1..].iter().map(|&p| pt(p)).collect();
+                        sink.AddLines(&rest);
+                        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                        sink.Close()?;
+                        t.rt.FillGeometry(&geom, &t.brushes[level_index(level)], None);
+                    }
                     Shape::Line { a, b, width, level } if level > 0 => {
                         let brush = &t.brushes[level_index(level)];
                         t.rt.DrawLine(pt(a), pt(b), brush, width, None);

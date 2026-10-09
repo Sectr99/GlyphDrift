@@ -4,7 +4,8 @@
 [general]
 fps = 0                       # 0 = auto (24 ASCII, 30 graphics), else 1..=60
 animation = "matrix"          # matrix | plasma | fire | waves | ripples | wind
-                              # graphics (30 fps): constellation | flow | helix | globe | dotwave | cubes
+                              # graphics (30 fps): constellation | flow
+                              # loops (30 fps): helix | globe | dotwave | cubes | orb | sunburst | moon
 speed = 1.0                   # animation speed multiplier, 0.1..=4.0
 pause_on_fullscreen = true
 pause_on_battery_saver = true
@@ -15,8 +16,8 @@ family = "Consolas"
 size = 16                     # pixel height
 
 [theme]
-# matrix | catppuccin-mocha | tokyo-night | nord | gruvbox | dracula
-# rose-pine | kanagawa | one-dark | solarized-dark
+# matrix | mono | catppuccin-mocha | tokyo-night | nord | gruvbox | dracula
+# rose-pine | kanagawa | one-dark | solarized-dark | claude
 name = "matrix"
 ramp = " .:-=+*#%@"           # dark -> bright, used by plasma and fire
 glass = 0.0                   # frosted veil over the animation, 0.0..=0.9 (higher = calmer)

@@ -22,6 +22,11 @@ impl V3 {
         Self::new(self.x * c + self.z * s, self.y, -self.x * s + self.z * c)
     }
 
+    pub fn rot_z(self, a: f32) -> Self {
+        let (s, c) = a.sin_cos();
+        Self::new(self.x * c - self.y * s, self.x * s + self.y * c, self.z)
+    }
+
     /// Orthographic projection: scale by `s` about screen point `c`.
     pub fn screen(self, c: (f32, f32), s: f32) -> (f32, f32) {
         (c.0 + self.x * s, c.1 + self.y * s)

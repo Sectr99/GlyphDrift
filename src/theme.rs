@@ -38,6 +38,14 @@ pub const THEMES: &[Theme] = &[
         [0x005522, 0x00aa44, 0x00ff66],
         [0x7a1f00, 0xff6a00, 0xffd75e]
     ),
+    // Pure black and white.
+    theme!(
+        "mono",
+        "Mono",
+        0x000000,
+        [0x3c3c3c, 0x9a9a9a, 0xffffff],
+        [0x3c3c3c, 0x9a9a9a, 0xffffff]
+    ),
     // base | blue, sapphire, sky | red, peach, yellow
     theme!(
         "catppuccin-mocha",
@@ -109,6 +117,14 @@ pub const THEMES: &[Theme] = &[
         0x002b36,
         [0x268bd2, 0x2aa198, 0x93a1a1],
         [0xdc322f, 0xcb4b16, 0xb58900]
+    ),
+    // Claude: slate | book cloth, coral, ivory | error red, coral, manilla
+    theme!(
+        "claude",
+        "Claude",
+        0x262624,
+        [0xcc785c, 0xd97757, 0xf0efea],
+        [0xbf4d43, 0xd97757, 0xebdbbc]
     ),
 ];
 

@@ -3,7 +3,7 @@
 //! Coordinates are pixels in the wallpaper window. `level` is a brightness 0..=255 mapped
 //! through the same theme palette as grid cells, so themes and glass apply unchanged.
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     Line {
         a: (f32, f32),
@@ -18,4 +18,6 @@ pub enum Shape {
         fill: bool,
         level: u8,
     },
+    /// Filled polygon, closed automatically. Needs at least 3 points.
+    Polygon { points: Vec<(f32, f32)>, level: u8 },
 }

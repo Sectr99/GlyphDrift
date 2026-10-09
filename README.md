@@ -3,8 +3,8 @@
 A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behind your desktop icons.
 
 - Single portable exe (~0.7 MB), no installer, no admin rights, no network access
-- Animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (vector graphics)
-- Themes: Matrix, Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark
+- Animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (vector graphics); Helix, Wire globe, Dot wave, Cubes, Striped orb, Sunburst, Moon (minimal geometric loops)
+- Themes: Matrix, Mono, Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Claude
 - Pauses automatically for fullscreen apps and Windows battery saver
 - About 0.3–0.7% CPU at the default frame rate, under 2% at 60 FPS; around 45 MB of memory, most of it the GPU driver
 

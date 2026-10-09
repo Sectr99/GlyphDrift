@@ -17,9 +17,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, DestroyMenu, DestroyWindow, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
     LoadIconW, PostMessageW, RegisterClassW, RegisterWindowMessageW, SendMessageW,
     SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, CREATESTRUCTW, GWLP_USERDATA, HICON,
-    HMENU, IDI_APPLICATION, MF_BYCOMMAND, MF_POPUP, MF_SEPARATOR, MF_STRING, SM_CXSMICON,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_NCCREATE,
-    WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
+    HMENU, IDI_APPLICATION, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    SM_CXSMICON, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY,
+    WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
 };
 
 /// Posted to the wallpaper window when the user picks Pause/Resume.
@@ -37,6 +37,7 @@ pub const WM_SET_SPEED: u32 = WM_APP + 6;
 /// Posted to the wallpaper window with WPARAM = index into `theme::GLASS`.
 pub const WM_SET_GLASS: u32 = WM_APP + 7;
 const ID_QUIT: usize = 2;
+const ID_AUTOSTART: usize = 3;
 const ID_ANIM_BASE: usize = 100;
 const ID_THEME_BASE: usize = 200;
 const ID_SPEED_BASE: usize = 300;
@@ -83,48 +84,13 @@ static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 /// The tray HICON, created in `create` and destroyed in `destroy`; 0 = stock icon.
 static ICON: AtomicIsize = AtomicIsize::new(0);
 
-/// Holes cut from the filled 2..22 square, in the 24x24 viewBox of `assets/icon.svg`
-/// (x0, y0, x1, y1).
-const ICON_HOLES: [[f32; 4]; 8] = [
-    [4.0, 16.0, 8.0, 20.0],
-    [10.0, 16.0, 16.0, 20.0],
-    [18.0, 16.0, 20.0, 20.0],
-    [13.0, 10.0, 20.0, 14.0],
-    [4.0, 10.0, 11.0, 14.0],
-    [4.0, 4.0, 6.0, 8.0],
-    [8.0, 4.0, 14.0, 8.0],
-    [16.0, 4.0, 20.0, 8.0],
-];
 /// White, like the stock notification-area icons.
 const ICON_RGB: (u8, u8, u8) = (0xff, 0xff, 0xff);
-
-/// Fraction of pixel (px, py) of an `n` x `n` icon covered by the shape (4x4 supersampling).
-fn icon_coverage(px: usize, py: usize, n: usize) -> f32 {
-    const S: usize = 4;
-    let inside = |x: f32, y: f32| {
-        (2.0..22.0).contains(&x)
-            && (2.0..22.0).contains(&y)
-            && !ICON_HOLES
-                .iter()
-                .any(|h| x >= h[0] && x < h[2] && y >= h[1] && y < h[3])
-    };
-    let to_view = |p: usize, s: usize| (p as f32 + (s as f32 + 0.5) / S as f32) * 24.0 / n as f32;
-    let hits = (0..S * S)
-        .filter(|i| inside(to_view(px, i % S), to_view(py, i / S)))
-        .count();
-    hits as f32 / (S * S) as f32
-}
 
 /// Rasterize the icon at the small-icon size (DPI-scaled) into a 32-bit alpha HICON.
 unsafe fn make_icon() -> HICON {
     let n = GetSystemMetrics(SM_CXSMICON).clamp(16, 256) as usize;
-    let mut bgra = Vec::with_capacity(n * n * 4);
-    for y in 0..n {
-        for x in 0..n {
-            let a = (icon_coverage(x, y, n) * 255.0).round() as u8;
-            bgra.extend([ICON_RGB.2, ICON_RGB.1, ICON_RGB.0, a]);
-        }
-    }
+    let bgra = crate::icon::bgra(n, ICON_RGB);
     // 1-bpp AND mask, rows padded to 16 bits; all zero so the alpha channel decides.
     let mask = vec![0u8; n.div_ceil(16) * 2 * n];
     // SAFETY: `bgra` holds n*n 32-bit pixels and `mask` n rows of WORD-aligned 1-bpp bits,
@@ -248,6 +214,13 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Glass"));
                 }
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+                let autostart = crate::autostart::enabled();
+                let flags = if autostart {
+                    MF_STRING | MF_CHECKED
+                } else {
+                    MF_STRING
+                };
+                let _ = AppendMenuW(menu, flags, ID_AUTOSTART, w!("Start with Windows"));
                 let _ = AppendMenuW(menu, MF_STRING, ID_PAUSE, w!("Pause / Resume"));
                 let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit"));
                 let mut pt = Default::default();
@@ -266,6 +239,11 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 match cmd.0 as usize {
                     ID_PAUSE => {
                         let _ = PostMessageW(target, WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
+                    }
+                    ID_AUTOSTART => {
+                        if let Err(e) = crate::autostart::set(!autostart) {
+                            eprintln!("autostart: {e}");
+                        }
                     }
                     ID_QUIT => {
                         let _ = PostMessageW(target, WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -314,21 +292,5 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::icon_coverage;
-
-    #[test]
-    fn icon_shape_matches_svg() {
-        // At 24 px one pixel is one viewBox unit.
-        assert_eq!(icon_coverage(0, 0, 24), 0.0); // outside the frame
-        assert_eq!(icon_coverage(2, 2, 24), 1.0); // frame corner
-        assert_eq!(icon_coverage(5, 5, 24), 0.0); // hole [4,4]-[6,8]
-        assert_eq!(icon_coverage(12, 14, 24), 1.0); // bar between hole rows
-        let partial = icon_coverage(1, 1, 16); // edge straddles the pixel at 16 px
-        assert!(partial > 0.0 && partial < 1.0);
     }
 }

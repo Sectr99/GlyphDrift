@@ -1,15 +1,18 @@
 //! ASCII live wallpaper.
 //!
-//! Portable core (`grid`, `anim`, `config`, `theme`) builds and tests on any platform.
-//! Windows-only host code (`desktop`, `render`, `tray`, `power`, `app`) is cfg-gated.
+//! Portable core (`grid`, `anim`, `config`, `theme`, `icon`) builds and tests on any platform.
+//! Windows-only host code (`desktop`, `render`, `tray`, `power`, `autostart`, `app`) is cfg-gated.
 
 pub mod anim;
 pub mod config;
 pub mod grid;
+pub mod icon;
 pub mod theme;
 
 #[cfg(windows)]
 pub mod app;
+#[cfg(windows)]
+pub mod autostart;
 #[cfg(windows)]
 pub mod desktop;
 #[cfg(windows)]

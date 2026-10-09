@@ -26,6 +26,7 @@ pub struct General {
     /// Animation speed multiplier.
     pub speed: f32,
     pub pause_on_fullscreen: bool,
+    pub pause_on_battery_saver: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -60,6 +61,7 @@ impl Default for General {
             animation: "matrix".into(),
             speed: 1.0,
             pause_on_fullscreen: true,
+            pause_on_battery_saver: true,
         }
     }
 }
@@ -201,6 +203,11 @@ pub fn default_path() -> Option<std::path::PathBuf> {
             .join("ascii-wallpaper")
             .join("config.toml"),
     )
+}
+
+/// Modification time of the config file, for hot-reload; None if it doesn't exist.
+pub fn modified() -> Option<std::time::SystemTime> {
+    std::fs::metadata(default_path()?).ok()?.modified().ok()
 }
 
 /// Load from disk; missing file means defaults, silently.

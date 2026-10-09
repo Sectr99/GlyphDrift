@@ -42,6 +42,8 @@ struct App {
     seed: u64,
     last_frame: Instant,
     last_power_check: Instant,
+    /// Config file mtime at last load; a change triggers a reload.
+    config_mtime: Option<SystemTime>,
     user_paused: bool,
     auto_paused: bool,
 }
@@ -80,6 +82,47 @@ impl App {
         self.renderer.set_colors(t.bg, stops, self.cfg.theme.glass);
     }
 
+    /// Reload the config if the file changed (hand edits, or our own tray saves), applying
+    /// only what differs so an unchanged animation keeps running. Returns true if reloaded.
+    fn reload_if_changed(&mut self) -> bool {
+        let mtime = config::modified();
+        if mtime == self.config_mtime {
+            return false;
+        }
+        self.config_mtime = mtime;
+        let (cfg, warnings) = config::load();
+        for w in &warnings {
+            eprintln!("config: {w}");
+        }
+        let old = std::mem::replace(&mut self.cfg, cfg);
+        let (new_font, new_anim) = (
+            (&old.font.family, old.font.size) != (&self.cfg.font.family, self.cfg.font.size),
+            (&old.general.animation, &old.theme.ramp)
+                != (&self.cfg.general.animation, &self.cfg.theme.ramp),
+        );
+        if new_font {
+            let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
+            match Renderer::new(
+                &self.cfg.font.family,
+                self.cfg.font.size,
+                t.bg,
+                &t.cool,
+                0.0,
+            ) {
+                Ok(r) => self.renderer = r,
+                Err(e) => eprintln!("config: font change failed: {e}"),
+            }
+        }
+        if new_anim {
+            self.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
+        }
+        if new_font || new_anim {
+            self.resize(self.width, self.height); // new cell size and/or fresh animation
+        }
+        self.apply_colors();
+        true
+    }
+
     /// Re-evaluate pause state; returns true if the timer interval needs to change.
     fn refresh_pause(&mut self) -> bool {
         if self.last_power_check.elapsed().as_secs() < 1 {
@@ -87,7 +130,9 @@ impl App {
         }
         self.last_power_check = Instant::now();
         let before = self.paused();
-        self.auto_paused = self.cfg.general.pause_on_fullscreen && power::fullscreen_app_active();
+        let g = &self.cfg.general;
+        self.auto_paused = (g.pause_on_fullscreen && power::fullscreen_app_active())
+            || (g.pause_on_battery_saver && power::battery_saver_on());
         self.paused() != before
     }
 }
@@ -121,7 +166,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         on_display_change(hwnd, app);
                     }
                 }
-                let changed = app.refresh_pause();
+                // Once a second: pick up config edits, then re-check auto-pause.
+                let reloaded =
+                    app.last_power_check.elapsed().as_secs() >= 1 && app.reload_if_changed();
+                if reloaded {
+                    let _ = InvalidateRect(hwnd, None, BOOL(0));
+                }
+                let changed = app.refresh_pause() || reloaded;
                 if changed {
                     app.last_frame = Instant::now();
                     SetTimer(hwnd, TIMER_ID, app.interval_ms(), None);
@@ -270,6 +321,7 @@ pub fn run() -> Result<()> {
             seed,
             last_frame: now,
             last_power_check: now,
+            config_mtime: config::modified(),
             user_paused: false,
             auto_paused: false,
         }));

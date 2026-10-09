@@ -1,0 +1,15 @@
+# Copy to %APPDATA%\ascii-wallpaper\config.toml
+
+[general]
+fps = 24                      # clamped to 1..=60
+animation = "matrix"          # "matrix" | "plasma"
+pause_on_fullscreen = true
+
+[font]
+family = "Consolas"
+size = 16                     # pixel height
+
+[theme]
+foreground = "#00ff66"
+background = "#000000"
+ramp = " .:-=+*#%@"           # dark -> bright, used by brightness-mapped animations

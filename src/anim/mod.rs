@@ -12,7 +12,6 @@ mod matrix;
 mod plasma;
 mod ripples;
 mod rng;
-mod skull;
 mod waves;
 mod wind;
 
@@ -20,36 +19,62 @@ pub use constellation::Constellation;
 pub use fire::Fire;
 pub use flow::Flow;
 pub use fluid::{Ink, LavaLamp, Topographic};
-pub use isolines::{Interference, Isobars, Ridgelines, WoodGrain};
-pub use loops::{Cubes, DotWave, Globe, Helix, Moon, Orb, Sunburst};
+pub use isolines::{Dunes, Hillshade, Interference, Isobars, Ridgelines, WoodGrain};
+pub use loops::{Cubes, DotWave, Globe, Helix, Moon, Sunburst};
 pub use matrix::Matrix;
 pub use plasma::Plasma;
 pub use ripples::Ripples;
 pub use rng::Rng;
-pub use skull::Skull;
 pub use waves::Waves;
 pub use wind::Wind;
 
 use crate::grid::Grid;
 use crate::shape::Shape;
 
-/// Drawing area handed to `init`: the character grid and the window size in pixels.
+/// A rectangle in window pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    /// The smaller side: the scale unit for sizes, so features look the same on any aspect.
+    pub fn unit(&self) -> f32 {
+        self.w.min(self.h)
+    }
+}
+
+/// Drawing area handed to `init`: the character grid, the window size in pixels, and the
+/// `focus` rectangle (the primary monitor within the window). Full-bleed animations fill the
+/// whole window; centered ones center on `focus`; both take their scale from `focus.unit()`,
+/// so a multi-monitor desktop doesn't split a centered object or shrink features.
 #[derive(Clone, Copy, Debug)]
 pub struct Size {
     pub cols: usize,
     pub rows: usize,
     pub width: f32,
     pub height: f32,
+    pub focus: Rect,
 }
 
 impl Size {
     /// A `cols` x `rows` grid of nominal 8x16 px cells (tests and previews).
     pub fn cells(cols: usize, rows: usize) -> Self {
+        let (width, height) = (cols as f32 * 8.0, rows as f32 * 16.0);
         Self {
             cols,
             rows,
-            width: cols as f32 * 8.0,
-            height: rows as f32 * 16.0,
+            width,
+            height,
+            focus: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: width,
+                h: height,
+            },
         }
     }
 }
@@ -91,10 +116,8 @@ pub const ANIMATIONS: &[(&str, &str, &str)] = &[
     ("globe", "Wire globe", "loops"),
     ("dotwave", "Dot wave", "loops"),
     ("cubes", "Cubes", "loops"),
-    ("orb", "Striped orb", "loops"),
     ("sunburst", "Sunburst", "loops"),
     ("moon", "Moon", "loops"),
-    ("skull", "Skull", "loops"),
     ("lava", "Lava lamp", "fluid"),
     ("ink", "Ink in water", "fluid"),
     ("topo", "Topographic drift", "contour"),
@@ -102,6 +125,8 @@ pub const ANIMATIONS: &[(&str, &str, &str)] = &[
     ("isobars", "Isobars", "contour"),
     ("wood", "Wood grain", "contour"),
     ("interference", "Interference", "contour"),
+    ("hillshade", "Hillshade topo", "contour"),
+    ("dunes", "Dune ripples", "contour"),
 ];
 
 /// Speed presets offered in the tray: (multiplier, menu label).
@@ -150,10 +175,8 @@ pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
         "globe" => Box::new(Globe::new()),
         "dotwave" => Box::new(DotWave::new()),
         "cubes" => Box::new(Cubes::new()),
-        "orb" => Box::new(Orb::new()),
         "sunburst" => Box::new(Sunburst::new()),
         "moon" => Box::new(Moon::new()),
-        "skull" => Box::new(Skull::new()),
         "lava" => Box::new(LavaLamp::new()),
         "topo" => Box::new(Topographic::new()),
         "ink" => Box::new(Ink::new()),
@@ -161,6 +184,8 @@ pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
         "isobars" => Box::new(Isobars::new()),
         "wood" => Box::new(WoodGrain::new()),
         "interference" => Box::new(Interference::new()),
+        "hillshade" => Box::new(Hillshade::new()),
+        "dunes" => Box::new(Dunes::new()),
         _ => Box::new(Matrix::new()),
     }
 }
@@ -217,6 +242,12 @@ mod tests {
             rows: 135,
             width: 3840.0,
             height: 2160.0,
+            focus: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 3840.0,
+                h: 2160.0,
+            },
         };
         for &(name, ..) in ANIMATIONS {
             let mut a = by_name(name, " .:-=+*#%@");
@@ -231,6 +262,57 @@ mod tests {
                 assert!(shapes.len() < 100_000, "{name}: {} shapes", shapes.len());
             }
         }
+    }
+
+    #[test]
+    fn centered_loops_follow_the_primary_monitor_and_full_bleed_fills_the_desktop() {
+        // Two 1600x1000 monitors side by side, the primary on the right.
+        let size = Size {
+            cols: 400,
+            rows: 70,
+            width: 3200.0,
+            height: 1000.0,
+            focus: Rect {
+                x: 1600.0,
+                y: 0.0,
+                w: 1600.0,
+                h: 1000.0,
+            },
+        };
+        let xs = |name: &str| -> Vec<f32> {
+            let mut a = by_name(name, " .:-=+*#%@");
+            a.init(size, 3);
+            a.update(2.0);
+            let mut shapes = Vec::new();
+            a.draw(&mut shapes);
+            shapes
+                .iter()
+                .map(|s| match s {
+                    Shape::Line { a, b, .. } => (a.0 + b.0) / 2.0,
+                    Shape::Circle { c, .. } => c.0,
+                    Shape::Polygon { points, .. } => points[0].0,
+                })
+                .collect()
+        };
+        for &(name, _, group) in ANIMATIONS {
+            if group != "loops" || name == "globe" {
+                continue; // the globe is deliberately right of center
+            }
+            let x = xs(name);
+            let mean = x.iter().sum::<f32>() / x.len() as f32;
+            assert!(
+                (mean - 2400.0).abs() < 250.0,
+                "{name} centered at {mean}, not on the primary"
+            );
+        }
+        let ridges = xs("ridges");
+        let (lo, hi) = ridges
+            .iter()
+            .fold((f32::MAX, f32::MIN), |m, &x| (m.0.min(x), m.1.max(x)));
+        assert!(
+            lo < 20.0 && hi > 3180.0,
+            "ridgelines span {lo}..{hi}, not the whole desktop"
+        );
     }
 
     #[test]

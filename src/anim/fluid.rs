@@ -17,7 +17,8 @@ fn rand01(a: u32, b: u32) -> f32 {
 // ---------------------------------------------------------------------------------------
 // Lava lamp
 
-const BLOBS: u32 = 7;
+/// Blobs per primary-monitor area (a 1.6:1 screen gets about seven).
+const BLOBS_PER_SCREEN: f32 = 7.0;
 
 /// Soft metaball blobs that rise, merge and split on slow, staggered cycles: a glowing
 /// halftone core, a crisp contour at the blob edge and a faint halo line around it.
@@ -26,6 +27,8 @@ pub struct LavaLamp {
     t: f32,
     w: f32,
     h: f32,
+    /// Feature scale: the primary monitor's smaller side.
+    unit: f32,
 }
 
 impl LavaLamp {
@@ -35,8 +38,11 @@ impl LavaLamp {
 
     /// Blob centers and radii (px) at the current time.
     fn blobs(&self) -> Vec<(f32, f32, f32)> {
-        let unit = self.w.min(self.h);
-        (0..BLOBS)
+        let unit = self.unit;
+        let count = (self.w * self.h / (unit * unit * 1.6) * BLOBS_PER_SCREEN)
+            .round()
+            .clamp(3.0, 20.0) as u32;
+        (0..count)
             .map(|i| {
                 let r = |k: u32| rand01(i, k);
                 let speed = 0.05 + 0.07 * r(1); // each blob has its own rise-and-sink cycle
@@ -62,14 +68,14 @@ impl Animation for LavaLamp {
         30
     }
     fn init(&mut self, size: Size, seed: u64) {
-        (self.w, self.h) = (size.width, size.height);
+        (self.w, self.h, self.unit) = (size.width, size.height, size.focus.unit().max(1.0));
         self.t = (seed % 1000) as f32;
     }
     fn update(&mut self, dt: f32) {
         self.t += dt;
     }
     fn draw(&self, out: &mut Vec<Shape>) {
-        let pen = Pen::new(self.w.min(self.h));
+        let pen = Pen::new(self.unit);
         let blobs = self.blobs();
         // Metaball field: 1.0 at a lone blob's radius, larger inside, merging smoothly.
         let field = |x: f32, y: f32| {
@@ -126,6 +132,8 @@ pub struct Topographic {
     t: f32,
     w: f32,
     h: f32,
+    /// Feature scale: the primary monitor's smaller side.
+    unit: f32,
 }
 
 impl Topographic {
@@ -142,7 +150,7 @@ impl Animation for Topographic {
         30
     }
     fn init(&mut self, size: Size, seed: u64) {
-        (self.w, self.h) = (size.width, size.height);
+        (self.w, self.h, self.unit) = (size.width, size.height, size.focus.unit().max(1.0));
         self.t = (seed % 1000) as f32;
     }
     fn update(&mut self, dt: f32) {
@@ -150,7 +158,7 @@ impl Animation for Topographic {
     }
     fn draw(&self, out: &mut Vec<Shape>) {
         const LEVELS: i32 = 16; // contour interval: 1/LEVELS of the height range per side
-        let unit = self.w.min(self.h);
+        let unit = self.unit;
         let pen = Pen::new(unit);
         let (scale, drift, morph) = (1.0 / (unit * 0.45), self.t * 0.012, self.t * 0.035);
         let grid = Field::sample(self.w, self.h, pen.px(12.0), |x, y| {

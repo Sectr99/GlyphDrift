@@ -5,9 +5,9 @@
 fps = 0                       # 0 = auto (24 ASCII, 30 graphics), else 1..=60
 animation = "matrix"          # matrix | plasma | fire | waves | ripples | wind
                               # graphics (30 fps): constellation | flow
-                              # loops (30 fps): helix | globe | dotwave | cubes | orb | sunburst | moon | skull
+                              # loops (30 fps): helix | globe | dotwave | cubes | sunburst | moon
                               # fluid (30 fps; ink 24): lava | ink
-                              # contour (30 fps): topo | ridges | isobars | wood | interference
+                              # contour (30 fps): topo | ridges | isobars | wood | interference | hillshade | dunes
 speed = 1.0                   # animation speed multiplier, 0.1..=4.0
 pause_on_fullscreen = true
 pause_on_battery_saver = true

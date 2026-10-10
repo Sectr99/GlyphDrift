@@ -20,6 +20,8 @@ pub struct Flow {
     rng: Rng,
     w: f32,
     h: f32,
+    /// Pixel scale: focus unit / 1440.
+    scale: f32,
     t: f32,
     accum: f32,
 }
@@ -31,6 +33,7 @@ impl Flow {
             rng: Rng::new(1),
             w: 0.0,
             h: 0.0,
+            scale: 1.0,
             t: 0.0,
             accum: 0.0,
         }
@@ -39,16 +42,17 @@ impl Flow {
     /// Direction of the current at (x, y), in radians: a few slow, smooth waves.
     fn angle(&self, x: f32, y: f32) -> f32 {
         let t = self.t;
+        let (x, y) = (x / self.scale, y / self.scale);
         2.0 * (x * 0.0025 + t * 0.05).sin()
             + 2.0 * (y * 0.003 - t * 0.04).cos()
             + ((x + y) * 0.0015 + t * 0.03).sin()
     }
 
-    fn spawn(rng: &mut Rng, w: f32, h: f32, age: f32) -> Particle {
+    fn spawn(rng: &mut Rng, w: f32, h: f32, scale: f32, age: f32) -> Particle {
         let p = (rng.range(0.0, w), rng.range(0.0, h));
         Particle {
             trail: [p; TRAIL],
-            speed: rng.range(25.0, 45.0), // px per second
+            speed: rng.range(25.0, 45.0) * scale, // px per second
             age,
             life: rng.range(4.0, 10.0),
         }
@@ -66,7 +70,7 @@ impl Flow {
             let (nx, ny) = p.trail[0];
             // Respawn rather than wrap, so trails never streak across the screen.
             if p.age >= p.life || nx < 0.0 || ny < 0.0 || nx > self.w || ny > self.h {
-                *p = Self::spawn(&mut self.rng, self.w, self.h, 0.0);
+                *p = Self::spawn(&mut self.rng, self.w, self.h, self.scale, 0.0);
             }
         }
     }
@@ -90,13 +94,16 @@ impl Animation for Flow {
     fn init(&mut self, size: Size, seed: u64) {
         self.rng = Rng::new(seed);
         (self.w, self.h) = (size.width, size.height);
+        // Tuned on a 1440 px-tall screen: keep that look there, and the same proportions elsewhere.
+        self.scale = (size.focus.unit() / 1440.0).max(0.25);
         self.t = (seed % 1000) as f32;
         self.accum = 0.0;
-        let n = (size.width * size.height / PX_PER_PARTICLE).ceil() as usize;
+        let n = (size.width * size.height / (PX_PER_PARTICLE * self.scale * self.scale)).ceil()
+            as usize;
         self.particles = (0..n)
             .map(|_| {
                 let age = self.rng.range(0.0, 4.0);
-                Self::spawn(&mut self.rng, size.width, size.height, age)
+                Self::spawn(&mut self.rng, size.width, size.height, self.scale, age)
             })
             .collect();
         for _ in 0..TRAIL {
@@ -123,7 +130,7 @@ impl Animation for Flow {
                     out.push(Shape::Line {
                         a: seg[0],
                         b: seg[1],
-                        width: 1.2,
+                        width: 1.2 * self.scale.max(0.75),
                         level,
                     });
                 }

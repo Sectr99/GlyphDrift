@@ -8,8 +8,8 @@ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowExW, FindWindowW, GetSystemMetrics, SendMessageTimeoutW, SetWindowPos,
-    SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SWP_NOACTIVATE, SWP_NOZORDER,
+    SMTO_NORMAL, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOZORDER,
 };
 
 /// Find (or ask Explorer to create) the window our wallpaper should be parented to.
@@ -76,6 +76,16 @@ pub fn virtual_screen() -> RECT {
             bottom: y + GetSystemMetrics(SM_CYVIRTUALSCREEN),
         }
     }
+}
+
+/// The primary monitor as (x, y, w, h) in the wallpaper window's pixels. The window spans the
+/// virtual screen, whose origin can be negative when a monitor sits left of or above the
+/// primary; the primary itself always starts at screen (0, 0).
+pub fn primary_in_window() -> (f32, f32, f32, f32) {
+    let v = virtual_screen();
+    // SAFETY: GetSystemMetrics has no preconditions.
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    (-v.left as f32, -v.top as f32, w as f32, h as f32)
 }
 
 /// Size `hwnd` to the virtual screen within `parent`. When the icons share our parent

@@ -14,7 +14,7 @@ use windows::Win32::System::Threading::{
     TIMER_ALL_ACCESS,
 };
 use windows::Win32::UI::HiDpi::{
-    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW, IsWindow,
@@ -120,11 +120,18 @@ impl App {
         let cols = (width / cw).max(1) as usize;
         let rows = (height / ch).max(1) as usize;
         self.grid.resize(cols, rows);
+        let (fx, fy, fw, fh) = desktop::primary_in_window();
         let size = anim::Size {
             cols,
             rows,
             width: width as f32,
             height: height as f32,
+            focus: anim::Rect {
+                x: fx,
+                y: fy,
+                w: fw,
+                h: fh,
+            },
         };
         self.anim.init(size, self.seed);
         self.render_frame();
@@ -166,7 +173,7 @@ impl App {
             let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
             match Renderer::new(
                 &self.cfg.font.family,
-                self.cfg.font.size,
+                font_px(self.cfg.font.size),
                 t.bg,
                 &t.cool,
                 0.0,
@@ -342,6 +349,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
+/// The configured font size is in pixels at 100% display scaling; scale it by the system DPI
+/// so ASCII animations keep their proportions on high-DPI screens.
+fn font_px(size: i32) -> i32 {
+    // SAFETY: no preconditions; returns 96 at 100% scaling.
+    let dpi = unsafe { GetDpiForSystem() }.max(96);
+    (size as f32 * dpi as f32 / 96.0).round() as i32
+}
+
 /// Persist a tray choice; failure only costs the setting surviving a restart.
 fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
     if let Err(e) = config::save(section, key, value) {
@@ -368,7 +383,7 @@ pub fn run() -> Result<()> {
     let t = &THEMES[theme::index_of(&cfg.theme.name)];
     let renderer = Renderer::new(
         &cfg.font.family,
-        cfg.font.size,
+        font_px(cfg.font.size),
         t.bg,
         if anim.warm() { &t.warm } else { &t.cool },
         cfg.theme.glass,

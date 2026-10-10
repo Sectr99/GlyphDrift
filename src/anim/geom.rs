@@ -39,9 +39,12 @@ pub fn shade(z: f32, far: f32, near: f32) -> u8 {
     (far + (near - far) * k) as u8
 }
 
-/// Center of the drawing area and the scale unit for centered compositions.
-pub fn center(w: f32, h: f32) -> ((f32, f32), f32) {
-    ((w / 2.0, h / 2.0), w.min(h))
+/// Center of `focus` and the scale unit for centered compositions.
+pub fn center(focus: super::Rect) -> ((f32, f32), f32) {
+    (
+        (focus.x + focus.w / 2.0, focus.y + focus.h / 2.0),
+        focus.unit(),
+    )
 }
 
 #[cfg(test)]

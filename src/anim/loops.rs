@@ -15,7 +15,7 @@ use std::f32::consts::{PI, TAU};
 
 use super::geom::{center, shade, V3};
 use super::rng::hash3;
-use super::{Animation, Size};
+use super::{Animation, Rect, Size};
 use crate::shape::Shape;
 
 /// Shared state for every loop: elapsed time and drawing area.
@@ -24,17 +24,16 @@ struct Clock {
     t: f32,
     w: f32,
     h: f32,
+    focus: Rect,
 }
 
 impl Clock {
     fn init(&mut self, size: Size, seed: u64) {
-        (self.w, self.h) = (size.width, size.height);
+        (self.w, self.h, self.focus) = (size.width, size.height, size.focus);
         self.t = (seed % 1000) as f32; // restarts don't all begin at the same pose
     }
 }
 
-/// Brightness for filled areas: kept moderate so solid shapes stay calm behind icons.
-const FILL: f32 = 150.0;
 
 /// Line-weight tiers in px at a 1000 px screen; `Pen` scales them to the real size.
 pub(super) const HERO: f32 = 2.4;
@@ -59,13 +58,13 @@ fn ramp(a: f32, b: f32, x: f32) -> f32 {
 /// the left, and slightly high (the optical center). Only for compositions with something
 /// asymmetric to balance the shift (the globe's guide arc and orbit); balanced ones use
 /// `optical_center`, since an unjustified offset reads as a mistake.
-fn anchor(w: f32, h: f32) -> ((f32, f32), f32) {
-    ((w * 0.56, h * 0.47), w.min(h))
+fn anchor(f: Rect) -> ((f32, f32), f32) {
+    ((f.x + f.w * 0.56, f.y + f.h * 0.47), f.unit())
 }
 
 /// Horizontally centered, slightly high so the object doesn't appear to sag.
-pub(super) fn optical_center(w: f32, h: f32) -> ((f32, f32), f32) {
-    ((w * 0.5, h * 0.47), w.min(h))
+pub(super) fn optical_center(f: Rect) -> ((f32, f32), f32) {
+    ((f.x + f.w * 0.5, f.y + f.h * 0.47), f.unit())
 }
 
 /// Rotate screen offset (dx, dy) by `angle` about `c`.
@@ -323,7 +322,6 @@ loop_animation!(Helix, "helix");
 loop_animation!(Globe, "globe");
 loop_animation!(DotWave, "dotwave");
 loop_animation!(Cubes, "cubes");
-loop_animation!(Orb, "orb");
 loop_animation!(Sunburst, "sunburst");
 loop_animation!(Moon, "moon");
 
@@ -333,10 +331,10 @@ impl Helix {
     fn frame(&self, out: &mut Vec<Shape>) {
         const SAMPLES: usize = 160;
         const RUNGS: usize = 26;
-        let Clock { t, w, h } = self.0;
-        let (c, unit) = center(w, h);
+        let Clock { t, focus, .. } = self.0;
+        let (c, unit) = center(focus);
         let pen = Pen::new(unit);
-        let (half_len, r) = ((w * 0.32).min(unit * 0.62), unit * 0.085);
+        let (half_len, r) = ((focus.w * 0.32).min(unit * 0.62), unit * 0.085);
         // Perspective shrinks the far (right) end, re-centered so it doesn't pull left.
         let persp = |f: f32| 1.25 / (1.0 + 0.55 * f);
         let shift = (1.25 - 1.25 / 1.55) / 2.0 * half_len;
@@ -416,8 +414,8 @@ impl Globe {
     /// dashed guide arc with ticks framing it off-center.
     fn frame(&self, out: &mut Vec<Shape>) {
         const SEG: usize = 64;
-        let Clock { t, w, h } = self.0;
-        let (c, unit) = anchor(w, h);
+        let Clock { t, focus, .. } = self.0;
+        let (c, unit) = anchor(focus);
         let pen = Pen::new(unit);
         let r = unit * 0.25;
         let (spin, tilt) = (t * 0.22, 0.38 + 0.08 * (t * 0.3).sin());
@@ -580,8 +578,8 @@ impl DotWave {
         const RADIUS: f32 = 3.0; // field radius, world units
         const SPACING: f32 = 0.22;
         const DOT: f32 = 0.025; // dot radius, world units: shrinks with distance like spacing
-        let Clock { t, w, h } = self.0;
-        let (c, unit) = center(w, h);
+        let Clock { t, focus, .. } = self.0;
+        let (c, unit) = center(focus);
         // Camera high and back enough to see the whole disc; then center its near-to-far
         // extent on screen.
         let (focal, cam_h, dist) = (unit * 0.6, 3.0, 6.0);
@@ -633,8 +631,8 @@ impl Cubes {
             ([4, 5, 7, 6], (0.0, 0.0, 1.0)),
         ];
         let light = V3::new(-0.45, -0.7, 0.55);
-        let Clock { t, w, h } = self.0;
-        let (c, unit) = optical_center(w, h);
+        let Clock { t, focus, .. } = self.0;
+        let (c, unit) = optical_center(focus);
         let pen = Pen::new(unit);
         let s = unit * 0.12;
         let step = (t / PERIOD).floor();
@@ -704,80 +702,14 @@ impl Cubes {
     }
 }
 
-impl Orb {
-    /// A striped ball spinning about a slightly rolled axis, lit from the upper left: stripe
-    /// cells shaded by the light, a rim-lit limb, a highlight, a tilted ring passing behind
-    /// and then in front of the ball, and a halftone shadow.
-    fn frame(&self, out: &mut Vec<Shape>) {
-        const STRIPES: usize = 6;
-        const CELLS: usize = 16; // latitude cells per stripe: enough to hide banding
-        const EDGE: usize = 3; // points per cell edge
-        let Clock { t, w, h } = self.0;
-        let (c, unit) = optical_center(w, h);
-        let pen = Pen::new(unit);
-        let r = unit * 0.24;
-        let roll = 0.35 + 0.05 * (t * 0.2).sin();
-        let spin = t * 0.35;
-        let period = TAU / STRIPES as f32;
-        // Light from the upper left and in front, in the ball's unrolled frame.
-        let (sr, cr) = (-roll).sin_cos();
-        let (lx, ly, lz) = (LIGHT_2D.0 * 0.83, LIGHT_2D.1 * 0.83, 0.56f32);
-        let light = (lx * cr - ly * sr, lx * sr + ly * cr, lz);
-        let (ring_rot, rx, ry) = (roll + 0.18, r * 1.55, r * 0.3);
-
-        pen.halftone(out, (c.0 + r * 0.3, c.1 + r * 1.4), r * 0.95, r * 0.17, 30);
-        pen.path(out, &arc(c, rx, ry, ring_rot, PI, TAU, 72), HAIR, 75); // ring, far half
-        out.push(Shape::Circle {
-            c,
-            r,
-            fill: true,
-            level: 18, // the ball's body, so gaps between stripes read as surface
-        });
-        // Sphere point at (lon, lat): screen position and unrolled surface normal.
-        let surface = |lon: f32, lat: f32| {
-            let (sl, cl) = lat.sin_cos();
-            let n = (cl * lon.sin(), -sl, cl * lon.cos());
-            (turn(c, roll, n.0 * r, n.1 * r), n)
-        };
-        for k in 0..STRIPES {
-            let start = (spin + k as f32 * period).rem_euclid(TAU) - PI;
-            for shift in [-TAU, 0.0, TAU] {
-                let lo = (start + shift).max(-PI / 2.0);
-                let hi = (start + shift + period / 2.0).min(PI / 2.0);
-                if hi <= lo {
-                    continue;
-                }
-                for j in 0..CELLS {
-                    let lat =
-                        |i: usize| -PI / 2.0 + PI * (j * EDGE + i) as f32 / (CELLS * EDGE) as f32;
-                    let mut points: Vec<_> = (0..=EDGE).map(|i| surface(lo, lat(i)).0).collect();
-                    points.extend((0..=EDGE).rev().map(|i| surface(hi, lat(i)).0));
-                    let (_, n) = surface((lo + hi) / 2.0, (lat(0) + lat(EDGE)) / 2.0);
-                    let lambert = (n.0 * light.0 + n.1 * light.1 + n.2 * light.2).max(0.0);
-                    let level = (FILL * (0.2 + 0.85 * lambert)) as u8;
-                    out.push(Shape::Polygon { points, level });
-                }
-            }
-        }
-        pen.dot(
-            out,
-            (c.0 + LIGHT_2D.0 * r * 0.55, c.1 + LIGHT_2D.1 * r * 0.55),
-            r / pen.0 * 0.045,
-            220,
-        );
-        pen.rim(out, c, r, LIGHT_2D, 1.0);
-        pen.path(out, &arc(c, rx, ry, ring_rot, 0.0, PI, 72), MID, 185); // ring, near half
-    }
-}
-
 impl Sunburst {
     /// A radial waveform: many hairline rays around an empty center, like a ring of sound.
     /// Mostly a circle with a gentle drifting undulation plus fine per-ray detail. Quality
     /// from precision and repetition, not ornament; weight and brightness rise with length.
     fn frame(&self, out: &mut Vec<Shape>) {
         const RAYS: usize = 240;
-        let Clock { t, w, h } = self.0;
-        let (c, unit) = optical_center(w, h);
+        let Clock { t, focus, .. } = self.0;
+        let (c, unit) = optical_center(focus);
         let pen = Pen::new(unit);
         let (r_in, reach) = (unit * 0.12, unit * 0.13);
         let spin = t * 0.04;
@@ -828,8 +760,8 @@ impl Moon {
             (-0.45, 0.2, 0.18),
             (0.42, 0.35, 0.14),
         ];
-        let Clock { t, w, h } = self.0;
-        let (c, unit) = optical_center(w, h);
+        let Clock { t, focus, .. } = self.0;
+        let (c, unit) = optical_center(focus);
         let pen = Pen::new(unit);
         let r = unit * 0.2;
 

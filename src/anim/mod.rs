@@ -1,9 +1,12 @@
 //! Animation trait and built-in animations.
 
 mod constellation;
+mod contour;
 mod fire;
 mod flow;
+mod fluid;
 mod geom;
+mod isolines;
 mod loops;
 mod matrix;
 mod plasma;
@@ -16,6 +19,8 @@ mod wind;
 pub use constellation::Constellation;
 pub use fire::Fire;
 pub use flow::Flow;
+pub use fluid::{Ink, LavaLamp, Topographic};
+pub use isolines::{Interference, Isobars, Ridgelines, WoodGrain};
 pub use loops::{Cubes, DotWave, Globe, Helix, Moon, Orb, Sunburst};
 pub use matrix::Matrix;
 pub use plasma::Plasma;
@@ -90,6 +95,13 @@ pub const ANIMATIONS: &[(&str, &str, &str)] = &[
     ("sunburst", "Sunburst", "loops"),
     ("moon", "Moon", "loops"),
     ("skull", "Skull", "loops"),
+    ("lava", "Lava lamp", "fluid"),
+    ("ink", "Ink in water", "fluid"),
+    ("topo", "Topographic drift", "contour"),
+    ("ridges", "Ridgelines", "contour"),
+    ("isobars", "Isobars", "contour"),
+    ("wood", "Wood grain", "contour"),
+    ("interference", "Interference", "contour"),
 ];
 
 /// Speed presets offered in the tray: (multiplier, menu label).
@@ -142,6 +154,13 @@ pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
         "sunburst" => Box::new(Sunburst::new()),
         "moon" => Box::new(Moon::new()),
         "skull" => Box::new(Skull::new()),
+        "lava" => Box::new(LavaLamp::new()),
+        "topo" => Box::new(Topographic::new()),
+        "ink" => Box::new(Ink::new()),
+        "ridges" => Box::new(Ridgelines::new()),
+        "isobars" => Box::new(Isobars::new()),
+        "wood" => Box::new(WoodGrain::new()),
+        "interference" => Box::new(Interference::new()),
         _ => Box::new(Matrix::new()),
     }
 }

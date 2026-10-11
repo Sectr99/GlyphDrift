@@ -1,0 +1,31 @@
+# Copy to %APPDATA%\Glyphdrift\config.toml
+# Changes made in the Settings window and tray menu are saved back into this file.
+
+[general]
+fps = 0                       # 0 = auto (24 ASCII, 30 graphics), else 1..=60
+animation = "matrix"          # matrix | plasma | fire | waves | ripples | wind
+                              # graphics (30 fps): constellation | flow
+                              # loops (30 fps): helix | globe | dotwave | cubes | sunburst | moon
+                              # fluid (30 fps; ink 24): lava | ink
+                              # contour (30 fps): topo | ridges | isobars | wood | interference | hillshade | dunes
+speed = 1.0                   # animation speed multiplier, 0.1..=4.0
+scale = 1.0                   # overall scale (font, lines, feature sizes), 0.5..=2.0
+object_scale = 1.0            # extra scale for centered objects, 0.5..=2.0
+clock = false                 # time and date in Topographic drift; the contours flow around it
+pause_on_fullscreen = true
+pause_on_battery_saver = true
+# Edits to this file apply within a second; no restart needed.
+
+[font]
+family = "Consolas"
+size = 16                     # pixel height
+
+[theme]
+# terminal: matrix | mono | amber
+# editor: catppuccin-mocha | tokyo-night | nord | gruvbox | dracula | rose-pine | kanagawa
+#         one-dark | solarized-dark | everforest | monokai | ayu-dark | night-owl
+#         palenight | github-dark | oxocarbon | poimandres
+# neon: synthwave-84 | claude
+name = "matrix"
+ramp = " .:-=+*#%@"           # dark -> bright, used by plasma and fire
+glass = 0.0                   # "Icon readability": fades the animation toward the background, 0.0..=0.9

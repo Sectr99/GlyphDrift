@@ -1,0 +1,331 @@
+//! TOML configuration with defaults and validation.
+//!
+//! Invalid values never abort startup: they are clamped or replaced by defaults.
+
+use serde::Deserialize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgb(pub u8, pub u8, pub u8);
+
+impl Rgb {
+    pub fn parse(s: &str) -> Option<Rgb> {
+        let h = s.strip_prefix('#')?;
+        if h.len() != 6 || !h.is_ascii() {
+            return None;
+        }
+        let v = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+        Some(Rgb(v(0)?, v(2)?, v(4)?))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct General {
+    pub fps: u32,
+    pub animation: String,
+    /// Animation speed multiplier.
+    pub speed: f32,
+    /// Overall scale: ASCII font size, line weights and feature sizes.
+    pub scale: f32,
+    /// Extra scale for centered objects.
+    pub object_scale: f32,
+    /// Show the time and date (animations with a clock area: Topographic drift).
+    pub clock: bool,
+    pub pause_on_fullscreen: bool,
+    pub pause_on_battery_saver: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct Font {
+    pub family: String,
+    pub size: i32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct Theme {
+    /// One of `theme::THEMES`.
+    pub name: String,
+    pub ramp: String,
+    /// Frosted veil opacity over the animation, for legible desktop icon labels.
+    pub glass: f32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub general: General,
+    pub font: Font,
+    pub theme: Theme,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            fps: 0,
+            animation: "matrix".into(),
+            speed: 1.0,
+            scale: 1.0,
+            object_scale: 1.0,
+            clock: false,
+            pause_on_fullscreen: true,
+            pause_on_battery_saver: true,
+        }
+    }
+}
+
+impl Default for Font {
+    fn default() -> Self {
+        Self {
+            family: "Consolas".into(),
+            size: 16,
+        }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            name: "matrix".into(),
+            glass: 0.0,
+            ramp: " .:-=+*#%@".into(),
+        }
+    }
+}
+
+impl Config {
+    /// Parse and validate. Returns the config plus human-readable warnings.
+    pub fn from_toml(text: &str) -> (Config, Vec<String>) {
+        let mut warnings = Vec::new();
+        let mut cfg: Config = match toml::from_str(text) {
+            Ok(c) => c,
+            Err(e) => {
+                warnings.push(format!("config parse error, using defaults: {e}"));
+                Config::default()
+            }
+        };
+        cfg.validate(&mut warnings);
+        (cfg, warnings)
+    }
+
+    fn validate(&mut self, w: &mut Vec<String>) {
+        // 0 means auto: each animation's own frame rate.
+        let fps = if self.general.fps == 0 {
+            0
+        } else {
+            self.general.fps.clamp(1, 60)
+        };
+        if fps != self.general.fps {
+            w.push(format!(
+                "fps {} out of range, using {fps}",
+                self.general.fps
+            ));
+            self.general.fps = fps;
+        }
+        let speed = if self.general.speed.is_finite() {
+            self.general.speed.clamp(0.1, 4.0)
+        } else {
+            1.0
+        };
+        if speed != self.general.speed {
+            w.push(format!(
+                "speed {} out of range, using {speed}",
+                self.general.speed
+            ));
+            self.general.speed = speed;
+        }
+        let glass = if self.theme.glass.is_finite() {
+            self.theme.glass.clamp(0.0, 0.9)
+        } else {
+            0.0
+        };
+        if glass != self.theme.glass {
+            w.push(format!(
+                "glass {} out of range, using {glass}",
+                self.theme.glass
+            ));
+            self.theme.glass = glass;
+        }
+        for (name, value) in [
+            ("scale", &mut self.general.scale),
+            ("object_scale", &mut self.general.object_scale),
+        ] {
+            let clamped = if value.is_finite() {
+                value.clamp(0.5, 2.0)
+            } else {
+                1.0
+            };
+            if clamped != *value {
+                w.push(format!("{name} {value} out of range, using {clamped}"));
+                *value = clamped;
+            }
+        }
+        let size = self.font.size.clamp(6, 96);
+        if size != self.font.size {
+            w.push(format!(
+                "font size {} out of range, using {size}",
+                self.font.size
+            ));
+            self.font.size = size;
+        }
+        if !super::anim::ANIMATIONS
+            .iter()
+            .any(|a| a.0 == self.general.animation)
+        {
+            w.push(format!(
+                "unknown animation '{}', using matrix",
+                self.general.animation
+            ));
+            self.general.animation = "matrix".into();
+        }
+        let d = Theme::default();
+        if !super::theme::THEMES
+            .iter()
+            .any(|t| t.name == self.theme.name)
+        {
+            w.push(format!("unknown theme '{}', using matrix", self.theme.name));
+            self.theme.name = d.name;
+        }
+        if self.theme.ramp.chars().count() < 2 || !self.theme.ramp.is_ascii() {
+            w.push("ramp must be 2+ ASCII characters, using default".into());
+            self.theme.ramp = d.ramp;
+        }
+    }
+}
+
+/// Set `[section] key = value` in `text`, keeping everything else (comments included).
+pub fn set_value(
+    text: &str,
+    section: &str,
+    key: &str,
+    value: impl Into<toml_edit::Value>,
+) -> Result<String, String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
+    let table = doc
+        .entry(section)
+        .or_insert_with(toml_edit::table)
+        .as_table_mut()
+        .ok_or_else(|| format!("[{section}] is not a table"))?;
+    table[key] = toml_edit::value(value);
+    Ok(doc.to_string())
+}
+
+/// Persist one setting to the config file, creating it if needed. A config file that
+/// doesn't parse is left untouched rather than overwritten.
+pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Result<(), String> {
+    let path = default_path().ok_or("APPDATA not set")?;
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let out = set_value(&text, section, key, value)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{e}"))?;
+    }
+    std::fs::write(&path, out).map_err(|e| format!("{e}"))
+}
+
+/// `%APPDATA%\Glyphdrift\config.toml`
+pub fn default_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("APPDATA")?;
+    Some(
+        std::path::PathBuf::from(base)
+            .join("Glyphdrift")
+            .join("config.toml"),
+    )
+}
+
+/// The settings folder's names before the Glyphdrift rename, newest first.
+const LEGACY_DIRS: [&str; 2] = ["WallMotion", "ascii-wallpaper"];
+
+/// One-time move of the settings folder from an older name, if there is no current one.
+pub fn migrate() {
+    let Some(base) = std::env::var_os("APPDATA") else {
+        return;
+    };
+    let base = std::path::PathBuf::from(base);
+    let new = base.join("Glyphdrift");
+    if new.exists() {
+        return;
+    }
+    if let Some(old) = LEGACY_DIRS
+        .iter()
+        .map(|d| base.join(d))
+        .find(|d| d.is_dir())
+    {
+        let _ = std::fs::rename(old, new);
+    }
+}
+
+/// Modification time of the config file, for hot-reload; None if it doesn't exist.
+pub fn modified() -> Option<std::time::SystemTime> {
+    std::fs::metadata(default_path()?).ok()?.modified().ok()
+}
+
+/// Load from disk; missing file means defaults, silently.
+pub fn load() -> (Config, Vec<String>) {
+    match default_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        Some(text) => Config::from_toml(&text),
+        None => (Config::default(), Vec::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_is_defaults() {
+        let (c, w) = Config::from_toml("");
+        assert!(w.is_empty());
+        assert_eq!(c.general.fps, 0);
+        assert_eq!(c.theme.name, "matrix");
+    }
+
+    #[test]
+    fn clamps_and_falls_back() {
+        let (c, w) = Config::from_toml(
+            "[general]\nfps = 500\nspeed = -1.0\nanimation = \"nope\"\n[theme]\nname = \"nope\"\nramp = \"x\"\n",
+        );
+        assert_eq!(c.general.fps, 60);
+        assert_eq!(c.general.speed, 0.1);
+        assert_eq!(c.general.animation, "matrix");
+        assert_eq!(c.theme.name, "matrix");
+        assert_eq!(c.theme.ramp, " .:-=+*#%@");
+        assert_eq!(w.len(), 5);
+    }
+
+    #[test]
+    fn syntax_error_gives_defaults() {
+        let (c, w) = Config::from_toml("[general\nfps = ");
+        assert_eq!(c.general.fps, 0);
+        assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn example_file_parses_cleanly() {
+        let text = include_str!("../../config.example.toml");
+        let (_, w) = Config::from_toml(text);
+        assert!(w.is_empty(), "{w:?}");
+    }
+
+    #[test]
+    fn set_value_keeps_comments_and_adds_sections() {
+        let text = "# mine\n[general]\nfps = 30 # smooth\n";
+        let out = set_value(text, "theme", "name", "nord").unwrap();
+        assert!(
+            out.contains("# mine") && out.contains("fps = 30 # smooth"),
+            "{out}"
+        );
+        let out = set_value(&out, "theme", "name", "dracula").unwrap();
+        let (c, w) = Config::from_toml(&out);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!((c.general.fps, c.theme.name.as_str()), (30, "dracula"));
+        assert!(set_value("[broken", "theme", "name", "x").is_err());
+    }
+
+    #[test]
+    fn rgb_parse() {
+        assert_eq!(Rgb::parse("#0a0B0c"), Some(Rgb(10, 11, 12)));
+        assert_eq!(Rgb::parse("0a0b0c"), None);
+        assert_eq!(Rgb::parse("#12345"), None);
+    }
+}

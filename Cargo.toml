@@ -4,9 +4,9 @@ version = "0.2.3"
 edition = "2021"
 description = "Glyphdrift: a lightweight live wallpaper for Windows and macOS"
 
-# `web` builds the animations to WebAssembly for the website.
+# `web` builds the animations to WebAssembly for the website; `saver` is the macOS screen saver.
 [workspace]
-members = ["web"]
+members = ["web", "saver"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

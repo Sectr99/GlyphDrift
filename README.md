@@ -36,14 +36,15 @@ Changes apply immediately and are remembered.
 
 Unzip `Glyphdrift-macos.zip` from the [latest release](https://github.com/Sectr99/GlyphDrift/releases/latest) and move **Glyphdrift.app** to Applications. It isn't notarized yet, so macOS blocks the first launch: open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**. It lives in the menu bar, with no Dock icon:
 
-- The menu bar icon's menu has **Settings…**, **Animation**, **Theme**, **Show clock**, **Match Menu Bar to Theme**, **Open at Login**, **Pause / Resume** and **Quit**. Opening the app again also opens Settings.
+- The menu bar icon's menu has **Settings…**, **Animation**, **Theme**, **Show clock**, **Match Menu Bar to Theme**, **Show on Lock Screen**, **Install Screen Saver…**, **Open at Login**, **Pause / Resume** and **Quit**. Opening the app again also opens Settings.
 - macOS draws a pale frosted strip behind the menu bar wherever a window, including the wallpaper, lies under it. **Match menu bar to theme** (off by default) stops the wallpaper below the menu bar and sets the desktop picture to the theme's background color, so the menu bar sits on the theme. Your own picture is saved first and comes back when you turn the option off or quit, or on the next launch after a crash. macOS keeps a picture per Space and an app can only set the current one: other Spaces switch within a second of visiting them, and quitting restores the Space you're on. On macOS 26 you can instead turn off **System Settings > Menu Bar > Show menu bar background**.
-- **Show on lock screen** (on by default): the lock screen shows the desktop picture, not app windows, so Glyphdrift sets the picture to a still frame of the current animation and theme (without the clock, which would go stale). It's redrawn when you change animation, theme or scale, and every 5 minutes. Your own picture is saved first and comes back when you turn it off or quit, as with Match menu bar to theme; with both on, the frame gets a strip of the theme color behind the menu bar. An *animated* lock screen isn't possible with Apple's public APIs.
+- **Show on lock screen** (on by default): the lock screen shows the desktop picture, not app windows, so Glyphdrift sets the picture to a still frame of the current animation and theme (without the clock, which would go stale). It's redrawn when you change animation, theme or scale, and every 5 minutes. Your own picture is saved first and comes back when you turn it off or quit, as with Match menu bar to theme; with both on, the frame gets a strip of the theme color behind the menu bar. An *animated* lock screen isn't possible with Apple's public APIs; the screen saver is the way to see it moving while the Mac is locked.
+- **Screen saver:** **Install Screen Saver…** in the menu installs `Glyphdrift.saver`, which comes inside the app; macOS asks whether to install it for you or for all users, then opens Screen Saver settings, where you pick **Glyphdrift**. It shows the animation, theme and clock set in the app (read each time it starts), on every screen. Once it's installed for you, each app update brings the saver up to date too. With **Require password after screen saver begins** on, it keeps running behind the lock until you unlock.
 - Settings has the same controls as on Windows and opens at the top right, so the wallpaper stays visible.
 - Each screen gets its own window, so centered animations center on every screen. A screen that's fully covered (a fullscreen app, a locked screen) stops drawing; when all are covered, or Low Power Mode is on, the wallpaper pauses and the icon dims.
 - Settings live in `~/Library/Application Support/Glyphdrift/config.toml` (same format; the default font is Menlo). **Open at Login** adds `~/Library/LaunchAgents/com.sectr99.glyphdrift.plist`.
 
-To uninstall: untick **Open at Login**, **Quit**, then delete the app and `~/Library/Application Support/Glyphdrift`.
+To uninstall: untick **Open at Login**, **Quit**, then delete the app, `~/Library/Application Support/Glyphdrift` and, if you installed it, `~/Library/Screen Savers/Glyphdrift.saver`.
 
 ## Configuration
 
@@ -69,7 +70,7 @@ macOS requires Rust and the Xcode Command Line Tools:
 
 ```
 cargo run                  # run from the terminal; logs to the console
-macos/bundle.sh            # dist/Glyphdrift.app and a zip, universal (needs both macOS targets)
+macos/bundle.sh            # dist/Glyphdrift.app (with Glyphdrift.saver inside) and a zip, universal (needs both macOS targets)
 macos/bundle.sh --native   # this Mac's architecture only
 cargo test --release snapshots -- --ignored --nocapture   # every animation through Metal, to target/snapshots
 cargo run --release -- --screenshots <dir>                # website images, drawn offscreen (see below)

@@ -10,7 +10,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{ns_string, NSSize, NSString};
 
-use super::{autostart, App, Controller};
+use super::{autostart, saver, App, Controller};
 use crate::anim::ANIMATIONS;
 use crate::theme::THEMES;
 use crate::ui::{self, Row};
@@ -191,6 +191,14 @@ pub fn fill(app: &App, menu: &NSMenu) {
     );
     checked(&lock_screen, app.cfg.general.lock_screen);
     menu.addItem(&lock_screen);
+    if saver::available() {
+        let title = if saver::is_installed() {
+            "Screen Saver Settings…"
+        } else {
+            "Install Screen Saver…"
+        };
+        menu.addItem(&item(mtm, title, Some(sel!(installScreenSaver:)), target));
+    }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let login = item(mtm, "Open at Login", Some(sel!(toggleLogin:)), target);
     checked(&login, autostart::enabled());

@@ -1,4 +1,4 @@
-# Copy to %APPDATA%\Glyphdrift\config.toml
+# Copy to %APPDATA%\Glyphdrift\config.toml (macOS: ~/Library/Application Support/Glyphdrift/config.toml)
 # Changes made in the Settings window and tray menu are saved back into this file.
 
 [general]
@@ -12,13 +12,13 @@ speed = 1.0                   # animation speed multiplier, 0.1..=4.0
 scale = 1.0                   # overall scale (font, lines, feature sizes), 0.5..=2.0
 object_scale = 1.0            # extra scale for centered objects, 0.5..=2.0
 clock = false                 # time and date in Topographic drift; the contours flow around it
-pause_on_fullscreen = true
-pause_on_battery_saver = true
+pause_on_fullscreen = true    # macOS: while a screen is fully covered
+pause_on_battery_saver = true # macOS: Low Power Mode
 # Edits to this file apply within a second; no restart needed.
 
 [font]
-family = "Consolas"
-size = 16                     # pixel height
+family = "Consolas"           # macOS default: "Menlo"
+size = 16                     # pixel height (points on macOS)
 
 [theme]
 # terminal: matrix | mono | amber

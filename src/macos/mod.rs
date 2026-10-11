@@ -1,0 +1,766 @@
+//! macOS host: wallpaper windows, frame loop, menu bar item, settings window and lifecycle.
+//! Everything runs on the main thread; state lives in `APP`, reached from AppKit callbacks
+//! through `with_app`.
+
+mod autostart;
+mod desktop;
+mod menu;
+mod power;
+mod render;
+mod settings;
+
+use std::cell::{OnceCell, RefCell};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSMenu,
+    NSMenuDelegate, NSMenuItem, NSPopUpButton, NSScreen, NSWindow, NSWindowDelegate,
+    NSWindowOcclusionState,
+};
+use objc2_foundation::{
+    ns_string, NSDate, NSDateFormatter, NSDateFormatterStyle, NSDistributedNotificationCenter,
+    NSLocale, NSNotification, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer,
+};
+
+use crate::anim::{self, Animation};
+use crate::config::{self, Config};
+use crate::grid::Grid;
+use crate::shape::Shape;
+use crate::theme::{self, THEMES};
+use crate::ui;
+use render::Renderer;
+
+const PAUSED_INTERVAL: f64 = 1.0;
+/// Posted by a second launch to the running one: open settings.
+const OPEN_SETTINGS: &str = "com.sectr99.glyphdrift.open-settings";
+
+/// One screen: its window and its own copy of the animation, so centered objects center on
+/// every screen.
+struct Surface {
+    window: Retained<NSWindow>,
+    target: render::Target,
+    /// Pixels per point.
+    scale: f64,
+    anim: Box<dyn Animation>,
+    grid: Grid,
+    shapes: Vec<Shape>,
+    width: f64,
+    height: f64,
+    /// False while something covers the whole window.
+    visible: bool,
+}
+
+pub(crate) struct App {
+    mtm: MainThreadMarker,
+    cfg: Config,
+    renderer: Renderer,
+    /// The highest screen scale, which glyphs are rasterized at.
+    renderer_scale: f64,
+    surfaces: Vec<Surface>,
+    controller: Retained<Controller>,
+    timer: Option<Retained<NSTimer>>,
+    status: menu::Status,
+    seed: u64,
+    last_frame: Instant,
+    last_check: Instant,
+    /// Config file mtime at last load.
+    config_mtime: Option<SystemTime>,
+    user_paused: bool,
+    /// Why the wallpaper paused itself, if it did.
+    auto_paused: Option<&'static str>,
+    /// Time and date last shown.
+    clock: Option<[String; 2]>,
+}
+
+thread_local! {
+    static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+}
+
+/// Run `f` on the app state; None if it's missing or already borrowed (a re-entrant call).
+pub(crate) fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
+    APP.with(|a| a.try_borrow_mut().ok()?.as_mut().map(f))
+}
+
+impl App {
+    fn paused(&self) -> bool {
+        self.user_paused || self.auto_paused.is_some()
+    }
+
+    fn fps(&self) -> u32 {
+        match self.cfg.general.fps {
+            0 => self.surfaces.first().map_or(24, |s| s.anim.fps()),
+            n => n,
+        }
+    }
+
+    fn interval(&self) -> f64 {
+        if self.paused() {
+            PAUSED_INTERVAL
+        } else {
+            1.0 / self.fps().max(1) as f64
+        }
+    }
+
+    /// (Re)start the frame timer at the current interval. Common modes keep it firing while
+    /// a menu is open or a slider is dragged.
+    fn restart_timer(&mut self) {
+        if let Some(t) = self.timer.take() {
+            t.invalidate();
+        }
+        // SAFETY: `tick:` takes the timer and the target outlives it (the timer retains it).
+        let timer = unsafe {
+            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+                self.interval(),
+                &self.controller,
+                sel!(tick:),
+                None,
+                true,
+            )
+        };
+        timer.setTolerance(self.interval() * 0.1);
+        // SAFETY: a fresh timer on the main run loop.
+        unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+        self.timer = Some(timer);
+    }
+
+    fn theme(&self) -> &'static theme::Theme {
+        &THEMES[theme::index_of(&self.cfg.theme.name)]
+    }
+
+    /// One window per screen, replacing any current ones.
+    fn rebuild_surfaces(&mut self) {
+        for s in self.surfaces.drain(..) {
+            s.window.orderOut(None);
+        }
+        let bg = self.renderer.background();
+        let screens = NSScreen::screens(self.mtm);
+        let max_scale = screens
+            .iter()
+            .map(|s| s.backingScaleFactor())
+            .fold(1.0, f64::max);
+        if max_scale != self.renderer_scale {
+            self.renderer_scale = max_scale;
+            self.renderer
+                .set_font(&self.cfg.font.family, font_size(&self.cfg), max_scale);
+        }
+        for screen in screens.iter() {
+            let scale = screen.backingScaleFactor();
+            let target = self.renderer.target(scale);
+            let window = desktop::create(self.mtm, &screen, &target, bg);
+            self.surfaces.push(Surface {
+                window,
+                target,
+                scale,
+                anim: anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp),
+                grid: Grid::new(1, 1),
+                shapes: Vec::new(),
+                width: 0.0,
+                height: 0.0,
+                visible: true,
+            });
+        }
+        self.layout();
+    }
+
+    /// Size grids to the windows and re-init the animations.
+    fn layout(&mut self) {
+        let (cw, ch) = self.renderer.cell_size();
+        let g = &self.cfg.general;
+        for (i, s) in self.surfaces.iter_mut().enumerate() {
+            let size = s.window.frame().size;
+            s.width = size.width;
+            s.height = size.height;
+            let cols = (size.width / cw).max(1.0) as usize;
+            let rows = (size.height / ch).max(1.0) as usize;
+            s.grid.resize(cols, rows);
+            let (w, h) = (size.width as f32, size.height as f32);
+            s.anim.init(
+                anim::Size {
+                    cols,
+                    rows,
+                    width: w,
+                    height: h,
+                    focus: anim::Rect {
+                        zoom: g.scale,
+                        object_zoom: g.object_scale,
+                        ..anim::Rect::new(0.0, 0.0, w, h)
+                    },
+                },
+                self.seed.wrapping_add(i as u64),
+            );
+        }
+        self.render_frame();
+    }
+
+    /// Capture the current frame on every visible screen and show it.
+    fn render_frame(&mut self) {
+        self.clock = self.cfg.general.clock.then(local_clock);
+        for s in self.surfaces.iter_mut().filter(|s| s.visible) {
+            s.anim.render(&mut s.grid);
+            s.anim.set_clock(self.clock.as_ref());
+            s.shapes.clear();
+            s.anim.draw(&mut s.shapes);
+        }
+        self.present();
+    }
+
+    /// Draw the captured frames on every visible screen.
+    fn present(&mut self) {
+        for s in self.surfaces.iter_mut().filter(|s| s.visible) {
+            self.renderer.paint(
+                &mut s.target,
+                (s.width, s.height),
+                s.scale,
+                &s.grid,
+                &s.shapes,
+            );
+        }
+    }
+
+    /// The font and overall scale changed: re-measure, then re-lay out.
+    fn rebuild_renderer(&mut self) {
+        self.renderer.set_font(
+            &self.cfg.font.family,
+            font_size(&self.cfg),
+            self.renderer_scale,
+        );
+        self.layout();
+    }
+
+    /// Push the theme's colors (warm or cool, per animation) to the renderer and windows.
+    fn apply_colors(&mut self) {
+        let t = self.theme();
+        let warm = self.surfaces.first().is_some_and(|s| s.anim.warm());
+        let stops = if warm { &t.warm } else { &t.cool };
+        self.renderer.set_colors(t.bg, stops, self.cfg.theme.glass);
+        let bg = desktop::color(self.renderer.background());
+        for s in &self.surfaces {
+            s.window.setBackgroundColor(Some(&bg));
+        }
+        self.present();
+    }
+
+    fn set_animation(&mut self, index: usize) {
+        let Some(&(name, ..)) = anim::ANIMATIONS.get(index) else {
+            return;
+        };
+        self.cfg.general.animation = name.into();
+        for s in &mut self.surfaces {
+            s.anim = anim::by_name(name, &self.cfg.theme.ramp);
+        }
+        self.layout(); // re-inits and renders
+        self.apply_colors();
+        self.restart_timer(); // the frame rate may differ
+        save("general", "animation", name);
+        self.update_status();
+        settings::refresh(self);
+    }
+
+    fn set_theme(&mut self, index: usize) {
+        let Some(t) = THEMES.get(index) else {
+            return;
+        };
+        self.cfg.theme.name = t.name.into();
+        self.apply_colors();
+        save("theme", "name", t.name);
+        self.update_status();
+        settings::refresh(self);
+    }
+
+    /// A setting as the settings window shows it.
+    fn tweak_value(&self, id: usize) -> f32 {
+        let g = &self.cfg.general;
+        match id {
+            ui::SPEED => g.speed,
+            ui::FPS => g.fps as f32,
+            ui::GLASS => self.cfg.theme.glass,
+            ui::SCALE => g.scale,
+            ui::OBJECT_SCALE => g.object_scale,
+            ui::CLOCK => f32::from(u8::from(g.clock)),
+            _ => 0.0,
+        }
+    }
+
+    /// Apply a setting live; with `commit`, save it too.
+    fn tweak(&mut self, id: usize, value: f32, commit: bool) {
+        match id {
+            ui::SPEED => {
+                self.cfg.general.speed = value.clamp(0.1, 4.0);
+                if commit {
+                    save("general", "speed", decimal(self.cfg.general.speed));
+                }
+            }
+            ui::FPS => {
+                self.cfg.general.fps = value.round().clamp(0.0, 60.0) as u32;
+                self.restart_timer();
+                if commit {
+                    save("general", "fps", self.cfg.general.fps as i64);
+                }
+            }
+            ui::GLASS => {
+                self.cfg.theme.glass = value.clamp(0.0, 0.9);
+                self.apply_colors();
+                if commit {
+                    save("theme", "glass", decimal(self.cfg.theme.glass));
+                }
+            }
+            ui::SCALE => {
+                let scale = value.clamp(0.5, 2.0);
+                if scale != self.cfg.general.scale {
+                    self.cfg.general.scale = scale;
+                    self.rebuild_renderer(); // the font size follows the scale
+                }
+                if commit {
+                    save("general", "scale", decimal(scale));
+                }
+            }
+            ui::OBJECT_SCALE => {
+                let scale = value.clamp(0.5, 2.0);
+                if scale != self.cfg.general.object_scale {
+                    self.cfg.general.object_scale = scale;
+                    self.layout();
+                }
+                if commit {
+                    save("general", "object_scale", decimal(scale));
+                }
+            }
+            ui::CLOCK => {
+                self.cfg.general.clock = value > 0.5;
+                self.render_frame();
+                if commit {
+                    save("general", "clock", self.cfg.general.clock);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Reload the config if the file changed, applying only what differs. True if reloaded.
+    fn reload_if_changed(&mut self) -> bool {
+        let mtime = config::modified();
+        if mtime == self.config_mtime {
+            return false;
+        }
+        self.config_mtime = mtime;
+        let (cfg, warnings) = config::load();
+        for w in &warnings {
+            log!("config: {w}");
+        }
+        let old = std::mem::replace(&mut self.cfg, cfg);
+        let new_font = (&old.font.family, old.font.size, old.general.scale)
+            != (
+                &self.cfg.font.family,
+                self.cfg.font.size,
+                self.cfg.general.scale,
+            );
+        let new_anim = (&old.general.animation, &old.theme.ramp)
+            != (&self.cfg.general.animation, &self.cfg.theme.ramp);
+        if new_font {
+            self.renderer.set_font(
+                &self.cfg.font.family,
+                font_size(&self.cfg),
+                self.renderer_scale,
+            );
+        }
+        if new_anim {
+            for s in &mut self.surfaces {
+                s.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
+            }
+        }
+        if new_font || new_anim || old.general.object_scale != self.cfg.general.object_scale {
+            self.layout(); // new cell size or animation
+        }
+        self.apply_colors();
+        settings::refresh(self);
+        true
+    }
+
+    /// Re-evaluate pausing; true if the timer interval must change.
+    fn refresh_pause(&mut self) -> bool {
+        let before = self.paused();
+        let (on_cover, on_low_power) = (
+            self.cfg.general.pause_on_fullscreen,
+            self.cfg.general.pause_on_battery_saver,
+        );
+        let mut uncovered = false;
+        for s in &mut self.surfaces {
+            let visible = !on_cover
+                || s.window
+                    .occlusionState()
+                    .contains(NSWindowOcclusionState::Visible);
+            uncovered |= visible && !s.visible;
+            s.visible = visible;
+        }
+        if uncovered {
+            self.render_frame(); // catch up the screens that just came back
+        }
+        self.auto_paused = if on_cover && !self.surfaces.iter().any(|s| s.visible) {
+            Some("the desktop is covered")
+        } else if on_low_power && power::low_power_mode() {
+            Some("Low Power Mode is on")
+        } else {
+            None
+        };
+        self.update_status();
+        self.paused() != before
+    }
+
+    /// Menu bar hover text: animation and theme, or why it's paused.
+    fn update_status(&self) {
+        let tip = if self.user_paused {
+            "Glyphdrift: paused".to_string()
+        } else if let Some(reason) = self.auto_paused {
+            format!("Glyphdrift: paused while {reason}")
+        } else {
+            let anim = anim::ANIMATIONS[anim::index_of(&self.cfg.general.animation)].1;
+            format!("Glyphdrift: {anim} · {}", self.theme().label)
+        };
+        self.status.set(&tip, self.paused());
+    }
+
+    fn toggle_pause(&mut self) {
+        self.user_paused = !self.user_paused;
+        self.update_status();
+        self.last_frame = Instant::now();
+        self.restart_timer();
+    }
+
+    /// One frame tick: config edits and auto-pause once a second, then animate.
+    fn tick(&mut self) {
+        if self.last_check.elapsed().as_secs() >= 1 {
+            self.last_check = Instant::now();
+            let changed = self.reload_if_changed() | self.refresh_pause();
+            if changed {
+                self.last_frame = Instant::now();
+                self.restart_timer();
+            }
+        }
+        if self.paused() {
+            // Keep the clock current while paused.
+            if self.cfg.general.clock && self.clock != Some(local_clock()) {
+                self.render_frame();
+            }
+            return;
+        }
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.25);
+        self.last_frame = now;
+        let dt = dt * self.cfg.general.speed;
+        for s in self.surfaces.iter_mut().filter(|s| s.visible) {
+            s.anim.update(dt);
+        }
+        self.render_frame();
+    }
+}
+
+define_class!(
+    /// Target of the timer, menu, settings controls and app notifications.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    pub(crate) struct Controller;
+
+    impl Controller {
+        #[unsafe(method(tick:))]
+        fn tick(&self, _timer: &NSTimer) {
+            with_app(App::tick);
+        }
+
+        #[unsafe(method(openSettings:))]
+        fn open_settings(&self, _sender: Option<&AnyObject>) {
+            with_app(settings::open);
+        }
+
+        /// From an animation menu item; the tag is the index into `ANIMATIONS`.
+        #[unsafe(method(chooseAnimation:))]
+        fn choose_animation(&self, item: &NSMenuItem) {
+            let i = item.tag() as usize;
+            with_app(|app| app.set_animation(i));
+        }
+
+        /// From a theme menu item; the tag is the index into `THEMES`.
+        #[unsafe(method(chooseTheme:))]
+        fn choose_theme(&self, item: &NSMenuItem) {
+            let i = item.tag() as usize;
+            with_app(|app| app.set_theme(i));
+        }
+
+        /// From the settings popups: the selected item's tag.
+        #[unsafe(method(popupAnimation:))]
+        fn popup_animation(&self, popup: &NSPopUpButton) {
+            let i = popup.selectedTag() as usize;
+            with_app(|app| app.set_animation(i));
+        }
+
+        #[unsafe(method(popupTheme:))]
+        fn popup_theme(&self, popup: &NSPopUpButton) {
+            let i = popup.selectedTag() as usize;
+            with_app(|app| app.set_theme(i));
+        }
+
+        #[unsafe(method(toggleClock:))]
+        fn toggle_clock(&self, _sender: Option<&AnyObject>) {
+            with_app(|app| {
+                let on = app.cfg.general.clock;
+                app.tweak(ui::CLOCK, if on { 0.0 } else { 1.0 }, true);
+                settings::refresh(app);
+            });
+        }
+
+        #[unsafe(method(toggleLogin:))]
+        fn toggle_login(&self, _sender: Option<&AnyObject>) {
+            if let Err(e) = autostart::set(!autostart::enabled()) {
+                log!("autostart: {e}");
+            }
+        }
+
+        #[unsafe(method(togglePause:))]
+        fn toggle_pause(&self, _sender: Option<&AnyObject>) {
+            with_app(App::toggle_pause);
+        }
+
+        #[unsafe(method(quit:))]
+        fn quit(&self, _sender: Option<&AnyObject>) {
+            NSApplication::sharedApplication(self.mtm()).terminate(None);
+        }
+
+        /// A settings slider moved; its tag is the tweak id.
+        #[unsafe(method(sliderChanged:))]
+        fn slider_changed(&self, slider: &objc2_app_kit::NSSlider) {
+            settings::slider_changed(slider);
+        }
+
+        #[unsafe(method(frameRateChanged:))]
+        fn frame_rate_changed(&self, popup: &NSPopUpButton) {
+            let fps = ui::FRAME_RATES[popup.indexOfSelectedItem().max(0) as usize].0;
+            with_app(|app| app.tweak(ui::FPS, fps, true));
+        }
+
+        #[unsafe(method(resetSettings:))]
+        fn reset_settings(&self, _sender: Option<&AnyObject>) {
+            with_app(|app| {
+                let anim = anim::index_of(&app.cfg.general.animation);
+                let (object_scale, _) = ui::applies(anim);
+                app.tweak(ui::FPS, 0.0, true);
+                for (id, _, _, _, default) in ui::SLIDERS {
+                    // Leave greyed-out sliders alone.
+                    if id != ui::OBJECT_SCALE || object_scale {
+                        app.tweak(id, default, true);
+                    }
+                }
+                settings::refresh(app);
+            });
+        }
+
+        #[unsafe(method(openSettingsNotification:))]
+        fn open_settings_notification(&self, _note: &NSNotification) {
+            with_app(settings::open);
+        }
+    }
+
+    unsafe impl NSObjectProtocol for Controller {}
+
+    unsafe impl NSApplicationDelegate for Controller {
+        #[unsafe(method(applicationDidChangeScreenParameters:))]
+        fn screens_changed(&self, _note: &NSNotification) {
+            with_app(App::rebuild_surfaces);
+        }
+
+        /// Opening the app again (Finder, Spotlight, `open`) opens settings.
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
+            with_app(settings::open);
+            false
+        }
+    }
+
+    unsafe impl NSMenuDelegate for Controller {
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            with_app(|app| menu::fill(app, menu));
+        }
+    }
+
+    unsafe impl NSWindowDelegate for Controller {
+        #[unsafe(method(windowWillClose:))]
+        fn window_will_close(&self, _note: &NSNotification) {
+            settings::closed();
+        }
+    }
+);
+
+impl Controller {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        // SAFETY: NSObject's designated initializer.
+        unsafe { msg_send![Self::alloc(mtm), init] }
+    }
+}
+
+/// The renderer's font size in points, times the overall scale.
+fn font_size(cfg: &Config) -> f64 {
+    (cfg.font.size as f64 * cfg.general.scale as f64)
+        .round()
+        .max(4.0)
+}
+
+/// Rounded to 3 decimals for the config (0.3f32 would save as 0.30000001192092896).
+fn decimal(v: f32) -> f64 {
+    (v as f64 * 1000.0).round() / 1000.0
+}
+
+/// Save a setting; a failure only loses it on restart.
+fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
+    if let Err(e) = config::save(section, key, value) {
+        log!("config: could not save {section}.{key}: {e}");
+    }
+}
+
+thread_local! {
+    /// Time, long date and log timestamp formatters.
+    static FORMATTERS: OnceCell<[Retained<NSDateFormatter>; 3]> = const { OnceCell::new() };
+}
+
+fn format_now(which: usize) -> String {
+    FORMATTERS.with(|f| {
+        let f = f.get_or_init(|| {
+            let time = NSDateFormatter::new();
+            time.setTimeStyle(NSDateFormatterStyle::ShortStyle);
+            time.setDateStyle(NSDateFormatterStyle::NoStyle);
+            let date = NSDateFormatter::new();
+            date.setTimeStyle(NSDateFormatterStyle::NoStyle);
+            date.setDateStyle(NSDateFormatterStyle::FullStyle);
+            let log = NSDateFormatter::new();
+            log.setLocale(Some(&NSLocale::localeWithLocaleIdentifier(ns_string!(
+                "en_US_POSIX"
+            ))));
+            log.setDateFormat(Some(ns_string!("yyyy-MM-dd HH:mm:ss")));
+            [time, date, log]
+        });
+        f[which].stringFromDate(&NSDate::now()).to_string()
+    })
+}
+
+/// Local time (no seconds) and long date, in the user's format.
+fn local_clock() -> [String; 2] {
+    [format_now(0), format_now(1)]
+}
+
+/// Local time for log lines.
+pub(crate) fn timestamp() -> String {
+    format_now(2)
+}
+
+/// True for the first running copy; a second launch asks the first to open settings.
+fn first_instance() -> bool {
+    let Some(path) = config::default_path().map(|p| p.with_file_name(".lock")) else {
+        return true;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let Ok(file) = std::fs::File::create(&path) else {
+        return true;
+    };
+    if file.try_lock().is_ok() {
+        // Held until exit: it marks the process running.
+        std::mem::forget(file);
+        return true;
+    }
+    let center = NSDistributedNotificationCenter::defaultCenter();
+    // SAFETY: a plain notification with no object or user info.
+    unsafe {
+        center.postNotificationName_object_userInfo_deliverImmediately(
+            &NSString::from_str(OPEN_SETTINGS),
+            None,
+            None,
+            true,
+        );
+    }
+    false
+}
+
+pub fn run() -> Result<(), String> {
+    let mtm = MainThreadMarker::new().ok_or("must start on the main thread")?;
+    if !first_instance() {
+        return Ok(());
+    }
+    crate::log::init();
+    let first_run = config::create_if_missing();
+    let (cfg, warnings) = config::load();
+    for w in &warnings {
+        log!("config: {w}");
+    }
+
+    let app = NSApplication::sharedApplication(mtm);
+    // A menu bar app: no Dock icon or app menu.
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    let controller = Controller::new(mtm);
+    app.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
+    // SAFETY: the selector takes one NSNotification; the observer lives for the process.
+    unsafe {
+        NSDistributedNotificationCenter::defaultCenter().addObserver_selector_name_object(
+            &controller,
+            sel!(openSettingsNotification:),
+            Some(&NSString::from_str(OPEN_SETTINGS)),
+            None,
+        );
+    }
+
+    let t = &THEMES[theme::index_of(&cfg.theme.name)];
+    let renderer = Renderer::new(
+        &cfg.font.family,
+        font_size(&cfg),
+        1.0,
+        t.bg,
+        &t.cool,
+        cfg.theme.glass,
+    )?;
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    let now = Instant::now();
+    let status = menu::Status::new(mtm, &controller);
+    let mut state = App {
+        mtm,
+        cfg,
+        renderer,
+        renderer_scale: 1.0,
+        surfaces: Vec::new(),
+        controller,
+        timer: None,
+        status,
+        seed,
+        last_frame: now,
+        last_check: now,
+        config_mtime: config::modified(),
+        user_paused: false,
+        auto_paused: None,
+        clock: None,
+    };
+    state.rebuild_surfaces();
+    state.apply_colors();
+    state.update_status();
+    state.restart_timer();
+    if first_run {
+        // Show new users where the controls are.
+        settings::open(&mut state);
+    }
+    APP.with(|a| *a.borrow_mut() = Some(state));
+
+    app.run();
+    Ok(())
+}
+
+/// Fatal error as an alert.
+pub fn fatal(text: &str) {
+    crate::log::write(&format!("fatal: {text}"));
+    if let Some(mtm) = MainThreadMarker::new() {
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(ns_string!("Glyphdrift"));
+        alert.setInformativeText(&NSString::from_str(text));
+        alert.runModal();
+    }
+}

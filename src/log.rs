@@ -1,8 +1,10 @@
-//! Append-only log at `%APPDATA%\Glyphdrift\glyphdrift.log` (release builds have no console).
+//! Append-only log next to the config: `%APPDATA%\Glyphdrift\glyphdrift.log`, or
+//! `~/Library/Application Support/Glyphdrift/glyphdrift.log` (release builds have no console).
 
 use std::io::Write;
 use std::path::PathBuf;
 
+#[cfg(windows)]
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
 /// Past this size at startup, the log moves to `glyphdrift.log.old`.
@@ -29,12 +31,7 @@ pub fn write(msg: &str) {
     let Some(p) = path() else {
         return;
     };
-    // SAFETY: no preconditions.
-    let t = unsafe { GetLocalTime() };
-    let line = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {msg}\n",
-        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
-    );
+    let line = format!("{} {msg}\n", timestamp());
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -45,4 +42,20 @@ pub fn write(msg: &str) {
     {
         let _ = f.write_all(line.as_bytes());
     }
+}
+
+/// Local time as `YYYY-MM-DD hh:mm:ss`.
+#[cfg(windows)]
+fn timestamp() -> String {
+    // SAFETY: no preconditions.
+    let t = unsafe { GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn timestamp() -> String {
+    crate::macos::timestamp()
 }

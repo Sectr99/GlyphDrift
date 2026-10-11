@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Glyphdrift</title>
-  <meta name="description" content="A quiet live wallpaper for Windows: contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.">
+  <meta name="description" content="A quiet live wallpaper for Windows and macOS: contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.">
   <meta name="theme-color" content="#000000">
   <meta property="og:title" content="Glyphdrift">
-  <meta property="og:description" content="A quiet live wallpaper for Windows. One small exe, no installer, no network.">
+  <meta property="og:description" content="A quiet live wallpaper for Windows and macOS. One small app, no installer, no network.">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -35,14 +35,15 @@
         <p class="wordmark">Glyphdrift</p>
       </div>
       <div class="hero-copy">
-        <h1>A quiet live wallpaper for Windows</h1>
+        <h1>A quiet live wallpaper for Windows and Mac</h1>
         <p>Contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.
-          One small exe. No installer, no account, no network.</p>
-        <div class="actions">
-          <a class="button primary" href="https://github.com/Sectr99/GlyphDrift/releases/latest">Download for Windows</a>
+          One small app. No installer, no account, no network.</p>
+        <div class="actions" id="downloads">
+          <a class="button primary" data-platform="windows" href="https://github.com/Sectr99/GlyphDrift/releases/latest/download/glyphdrift.exe">Download for Windows</a>
+          <a class="button" data-platform="mac" href="https://github.com/Sectr99/GlyphDrift/releases/latest/download/Glyphdrift-macos.zip">Download for Mac</a>
           <a class="button" href="https://github.com/Sectr99/GlyphDrift">View source</a>
         </div>
-        <p class="fine">Windows 10 and 11 · about 0.7 MB</p>
+        <p class="fine">Windows 10 and 11 · macOS 12 or later, Apple silicon and Intel · about 0.7 MB</p>
       </div>
     </section>
 
@@ -55,7 +56,7 @@
         </article>
         <article>
           <h3>Light on resources</h3>
-          <p>Most animations use around 1% of a modern CPU. Pauses itself for fullscreen apps and battery saver, and says so in the tray.</p>
+          <p>Most animations use around 1% of a modern CPU. Pauses itself for fullscreen apps and battery saver (Low Power Mode on a Mac), and says so in the tray or menu bar.</p>
         </article>
         <article>
           <h3>A clock that belongs</h3>
@@ -63,7 +64,7 @@
         </article>
         <article>
           <h3>Tweak it live</h3>
-          <p>Speed, scale, frame rate and theme apply as you drag. The settings window opens by the tray so the wallpaper is your preview.</p>
+          <p>Speed, scale, frame rate and theme apply as you drag. The settings window opens by the tray or menu bar icon, so the wallpaper is your preview.</p>
         </article>
       </div>
     </section>
@@ -88,9 +89,16 @@
     <section id="start" class="section">
       <h2>Get started</h2>
       <ol class="steps">
-        <li><span>1</span><div><h3>Download</h3><p>Grab <code>glyphdrift.exe</code> from the latest release. There is nothing to install.</p></div></li>
-        <li><span>2</span><div><h3>Run it</h3><p>The wallpaper starts behind your icons and an icon appears in the tray. Windows may warn about an unrecognized app: choose <em>More info</em>, then <em>Run anyway</em>.</p></div></li>
-        <li><span>3</span><div><h3>Make it yours</h3><p>Left-click the tray icon for settings. Turn on <em>Start with Windows</em> from the right-click menu to keep it.</p></div></li>
+        <li><span>1</span><div><h3>Download</h3>
+          <p><strong>Windows:</strong> grab <code>glyphdrift.exe</code> from the latest release. There is nothing to install.</p>
+          <p><strong>Mac:</strong> grab <code>Glyphdrift-macos.zip</code>, open it and move <em>Glyphdrift</em> to Applications.</p></div></li>
+        <li><span>2</span><div><h3>Run it</h3>
+          <p>The wallpaper starts behind your icons, and an icon appears in the tray or menu bar.</p>
+          <p><strong>Windows</strong> may warn about an unrecognized app: choose <em>More info</em>, then <em>Run anyway</em>.</p>
+          <p><strong>macOS</strong> blocks the first launch because the app isn't notarized yet: open <em>System Settings</em> › <em>Privacy &amp; Security</em>, scroll down and click <em>Open Anyway</em>.</p></div></li>
+        <li><span>3</span><div><h3>Make it yours</h3>
+          <p><strong>Windows:</strong> left-click the tray icon for settings. Turn on <em>Start with Windows</em> from the right-click menu to keep it.</p>
+          <p><strong>Mac:</strong> click the menu bar icon for settings and quick options. Turn on <em>Open at Login</em> to keep it.</p></div></li>
       </ol>
     </section>
   </main>
@@ -103,7 +111,7 @@
       <a href="https://github.com/Sectr99/GlyphDrift">GitHub</a>
       <a href="https://github.com/Sectr99/GlyphDrift/issues">Contact</a>
     </div>
-    <p class="trademarks">Windows is a trademark of the Microsoft group of companies. Theme names are
+    <p class="trademarks">Windows is a trademark of the Microsoft group of companies. Mac and macOS are trademarks of Apple Inc., registered in the U.S. and other countries. Theme names are
       trademarks of their respective owners and are used only to describe color palettes; Glyphdrift
       is an independent project, not affiliated with or endorsed by any of them.</p>
   </footer>

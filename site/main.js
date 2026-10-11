@@ -218,6 +218,19 @@ for (const t of THEMES) {
   swatches.appendChild(b);
 }
 
+// ---------------------------------------------------------------------------------------
+// Downloads: the visitor's platform first, as the primary button
+
+const isMac = /Mac/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+if (isMac) {
+  const downloads = document.getElementById("downloads");
+  const mac = downloads.querySelector('[data-platform="mac"]');
+  const windows = downloads.querySelector('[data-platform="windows"]');
+  mac.classList.add("primary");
+  windows.classList.remove("primary");
+  downloads.insertBefore(mac, windows);
+}
+
 let saved = null;
 try { saved = localStorage.getItem("glyphdrift-theme"); } catch { /* storage unavailable */ }
 resize();

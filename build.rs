@@ -1,6 +1,6 @@
-// Embed app.manifest and the exe icon with the MSVC linker; no build dependencies needed.
-// The icon is rasterized from src/icon.rs and written straight into a .res file, so no
-// resource compiler (rc.exe) is required either.
+// Embed app.manifest, the exe icon and version info with the MSVC linker; no build
+// dependencies needed. The icon is rasterized from src/icon.rs and, with the version info,
+// written straight into a .res file, so no resource compiler (rc.exe) is required either.
 
 #[path = "src/icon.rs"]
 #[allow(dead_code)]
@@ -11,10 +11,18 @@ const EXE_ICON_RGB: (u8, u8, u8) = (0x00, 0xff, 0x66);
 const SIZES: [usize; 6] = [16, 24, 32, 48, 64, 256];
 const RT_ICON: u16 = 3;
 const RT_GROUP_ICON: u16 = 14;
+const RT_VERSION: u16 = 16;
+
+/// Shown by Windows as the app's name (notifications, Task Manager, Startup apps) and
+/// publisher; the version numbers come from Cargo.toml.
+const PRODUCT: &str = "Glyphdrift";
+const PUBLISHER: &str = "Sectr99";
+const COPYRIGHT: &str = "© 2026 Sectr99";
 
 fn main() {
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=src/icon.rs");
+    println!("cargo:rerun-if-changed=Cargo.toml"); // version
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
         return;
     }
@@ -22,8 +30,10 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
     println!("cargo:rustc-link-arg-bins=/MANIFESTINPUT:{dir}\\app.manifest");
 
-    let res = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("icon.res");
-    std::fs::write(&res, icon_res()).unwrap();
+    let res = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("resources.res");
+    let mut data = icon_res();
+    res_entry(&mut data, RT_VERSION, 1, &version_info());
+    std::fs::write(&res, data).unwrap();
     println!("cargo:rustc-link-arg-bins={}", res.display());
 }
 
@@ -83,4 +93,94 @@ fn dib(n: usize) -> Vec<u8> {
     }
     out.resize(out.len() + mask_row * n, 0);
     out
+}
+
+/// VS_VERSIONINFO: fixed version numbers plus the strings Explorer and Task Manager show.
+fn version_info() -> Vec<u8> {
+    let part = |name: &str| -> u32 {
+        std::env::var(format!("CARGO_PKG_VERSION_{name}"))
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    };
+    let (major, minor, patch) = (part("MAJOR"), part("MINOR"), part("PATCH"));
+    let version = format!("{major}.{minor}.{patch}");
+
+    let mut fixed = Vec::new();
+    for v in [
+        0xFEEF_04BD,         // signature
+        0x0001_0000,         // structure version
+        major << 16 | minor, // file version
+        patch << 16,
+        major << 16 | minor, // product version
+        patch << 16,
+        0x3F,        // flags mask
+        0,           // flags
+        0x0004_0004, // VOS_NT_WINDOWS32
+        1,           // VFT_APP
+        0,           // subtype
+        0,           // date
+        0,
+    ] {
+        fixed.extend(u32::to_le_bytes(v));
+    }
+
+    let exe = format!("{}.exe", PRODUCT.to_lowercase());
+    let strings: Vec<Vec<u8>> = [
+        ("CompanyName", PUBLISHER),
+        ("FileDescription", PRODUCT),
+        ("FileVersion", &version),
+        ("InternalName", &PRODUCT.to_lowercase()),
+        ("LegalCopyright", COPYRIGHT),
+        ("OriginalFilename", &exe),
+        ("ProductName", PRODUCT),
+        ("ProductVersion", &version),
+    ]
+    .iter()
+    .map(|(key, value)| {
+        let text = utf16z(value);
+        version_node(key, 1, &text, (text.len() / 2) as u16, &[])
+    })
+    .collect();
+    // Language en-US (0x0409), code page Unicode (1200 = 0x04B0).
+    let table = version_node("040904B0", 1, &[], 0, &strings);
+    let string_info = version_node("StringFileInfo", 1, &[], 0, &[table]);
+    let translation = [0x0409u16, 0x04B0]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    let var = version_node("Translation", 0, &translation, 4, &[]);
+    let var_info = version_node("VarFileInfo", 1, &[], 0, &[var]);
+    version_node(
+        "VS_VERSION_INFO",
+        0,
+        &fixed,
+        fixed.len() as u16,
+        &[string_info, var_info],
+    )
+}
+
+/// One version-info block: length, value length (bytes, or characters for text), type
+/// (1 = text), NUL-terminated UTF-16 key, then value and children, each 4-byte aligned.
+fn version_node(key: &str, ty: u16, value: &[u8], value_len: u16, children: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = vec![0u8; 6];
+    out.extend(utf16z(key));
+    out.resize(out.len().next_multiple_of(4), 0);
+    out.extend(value);
+    for child in children {
+        out.resize(out.len().next_multiple_of(4), 0);
+        out.extend(child);
+    }
+    let len = out.len() as u16;
+    out[0..2].copy_from_slice(&len.to_le_bytes());
+    out[2..4].copy_from_slice(&value_len.to_le_bytes());
+    out[4..6].copy_from_slice(&ty.to_le_bytes());
+    out
+}
+
+fn utf16z(s: &str) -> Vec<u8> {
+    s.encode_utf16()
+        .chain(Some(0))
+        .flat_map(u16::to_le_bytes)
+        .collect()
 }

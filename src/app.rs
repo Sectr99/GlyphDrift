@@ -536,6 +536,7 @@ pub fn run() -> Result<()> {
     }
     crate::log::init();
     crate::autostart::migrate();
+    let first_run = config::create_if_missing();
     let (cfg, warnings) = config::load();
     for w in &warnings {
         log!("config: {w}");
@@ -616,6 +617,17 @@ pub fn run() -> Result<()> {
             let tray = tray::create(hwnd)?;
             (*app_ptr).tray = tray;
             (*app_ptr).update_tray();
+            if first_run {
+                // New users otherwise see the wallpaper change with no hint where the
+                // controls are; the icon may also be tucked away in the tray overflow.
+                tray::notify(
+                    tray,
+                    "Glyphdrift is running",
+                    "Click the Glyphdrift icon in the taskbar tray for settings, or right-click it \
+                     for quick options like Start with Windows. Can't see it? Click ^ next to \
+                     the clock.",
+                );
+            }
             (*app_ptr).timer.window = hwnd;
             (*app_ptr).timer.set((*app_ptr).interval_ms());
 

@@ -1,6 +1,8 @@
 # Glyphdrift
 
-A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behind your desktop icons.
+A quiet live wallpaper for Windows 10/11: contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.
+
+**[glyphdrift.com](https://glyphdrift.com)** · **[Download the latest release](https://github.com/Sectr99/GlyphDrift/releases/latest)**
 
 - Single portable exe (~0.7 MB), no installer, no admin rights, no network access
 - Animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (vector graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (minimal geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour)

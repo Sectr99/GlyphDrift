@@ -175,6 +175,14 @@ pub fn fill(app: &App, menu: &NSMenu) {
     let clock = item(mtm, "Show clock", Some(sel!(toggleClock:)), target);
     checked(&clock, app.cfg.general.clock);
     menu.addItem(&clock);
+    let menu_bar = item(
+        mtm,
+        "Match Menu Bar to Theme",
+        Some(sel!(toggleMatchMenuBar:)),
+        target,
+    );
+    checked(&menu_bar, app.cfg.general.match_menu_bar);
+    menu.addItem(&menu_bar);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let login = item(mtm, "Open at Login", Some(sel!(toggleLogin:)), target);
     checked(&login, autostart::enabled());

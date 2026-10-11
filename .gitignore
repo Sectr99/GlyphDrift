@@ -2,3 +2,4 @@
 Cargo.lock.bak
 *.log
 /dist
+/resume.md

@@ -5,6 +5,7 @@
 mod autostart;
 mod desktop;
 mod menu;
+mod picture;
 mod power;
 mod render;
 mod settings;
@@ -73,6 +74,8 @@ pub(crate) struct App {
     auto_paused: Option<&'static str>,
     /// Time and date last shown.
     clock: Option<[String; 2]>,
+    /// The desktop picture, while Match menu bar to theme replaces it.
+    picture: picture::DesktopPicture,
 }
 
 thread_local! {
@@ -149,7 +152,13 @@ impl App {
         for screen in screens.iter() {
             let scale = screen.backingScaleFactor();
             let target = self.renderer.target(scale);
-            let window = desktop::create(self.mtm, &screen, &target, bg);
+            let window = desktop::create(
+                self.mtm,
+                &screen,
+                &target,
+                bg,
+                self.cfg.general.match_menu_bar,
+            );
             self.surfaces.push(Surface {
                 window,
                 target,
@@ -163,6 +172,24 @@ impl App {
             });
         }
         self.layout();
+        self.sync_menu_bar(); // new screens get the picture too
+    }
+
+    /// Match menu bar to theme: show the background color as the desktop picture, or put
+    /// the user's pictures back.
+    fn sync_menu_bar(&mut self) {
+        if self.cfg.general.match_menu_bar {
+            self.picture.apply(self.mtm, self.renderer.background());
+        } else if self.picture.active() {
+            self.picture.restore(self.mtm);
+        }
+    }
+
+    fn toggle_match_menu_bar(&mut self) {
+        self.cfg.general.match_menu_bar = !self.cfg.general.match_menu_bar;
+        save("general", "match_menu_bar", self.cfg.general.match_menu_bar);
+        self.rebuild_surfaces(); // the windows stop at the menu bar or cover it; syncs too
+        settings::refresh(self);
     }
 
     /// Size grids to the windows and re-init the animations.
@@ -370,7 +397,10 @@ impl App {
                 s.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
             }
         }
-        if new_font || new_anim || old.general.object_scale != self.cfg.general.object_scale {
+        if old.general.match_menu_bar != self.cfg.general.match_menu_bar {
+            self.rebuild_surfaces(); // window height changes; lays out too
+        } else if new_font || new_anim || old.general.object_scale != self.cfg.general.object_scale
+        {
             self.layout(); // new cell size or animation
         }
         self.apply_colors();
@@ -433,6 +463,8 @@ impl App {
         if self.last_check.elapsed().as_secs() >= 1 {
             self.last_check = Instant::now();
             let changed = self.reload_if_changed() | self.refresh_pause();
+            // Theme and readability changes, other Spaces, a picture the user just chose.
+            self.sync_menu_bar();
             if changed {
                 self.last_frame = Instant::now();
                 self.restart_timer();
@@ -509,6 +541,11 @@ define_class!(
             });
         }
 
+        #[unsafe(method(toggleMatchMenuBar:))]
+        fn toggle_match_menu_bar(&self, _sender: Option<&AnyObject>) {
+            with_app(App::toggle_match_menu_bar);
+        }
+
         #[unsafe(method(toggleLogin:))]
         fn toggle_login(&self, _sender: Option<&AnyObject>) {
             if let Err(e) = autostart::set(!autostart::enabled()) {
@@ -573,6 +610,16 @@ define_class!(
         fn reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
             with_app(settings::open);
             false
+        }
+
+        /// Give the user's desktop pictures back.
+        #[unsafe(method(applicationWillTerminate:))]
+        fn will_terminate(&self, _note: &NSNotification) {
+            with_app(|app| {
+                if app.picture.active() {
+                    app.picture.restore(app.mtm);
+                }
+            });
         }
     }
 
@@ -739,6 +786,8 @@ pub fn run() -> Result<(), String> {
         user_paused: false,
         auto_paused: None,
         clock: None,
+        // Pictures a crashed run left recorded are restored or kept by `sync_menu_bar`.
+        picture: picture::DesktopPicture::load(),
     };
     state.rebuild_surfaces();
     state.apply_colors();

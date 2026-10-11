@@ -26,7 +26,7 @@ const ROW_H: f64 = 34.0;
 const LABEL_W: f64 = 130.0;
 const VALUE_W: f64 = 52.0;
 /// Rows: animation, theme, the sliders, frame rate, clock; then the buttons.
-const ROWS: usize = 4 + SLIDERS.len();
+const ROWS: usize = 5 + SLIDERS.len();
 
 /// (tweak id, slider, value label, name label)
 type SliderRow = (
@@ -43,6 +43,7 @@ struct Settings {
     sliders: Vec<SliderRow>,
     fps: Retained<NSPopUpButton>,
     clock: Retained<NSButton>,
+    menu_bar: Retained<NSButton>,
 }
 
 thread_local! {
@@ -113,6 +114,8 @@ pub fn refresh(app: &App) {
             }
         }
         s.clock.setEnabled(clock);
+        s.menu_bar
+            .setState(isize::from(app.cfg.general.match_menu_bar));
     });
 }
 
@@ -346,6 +349,22 @@ fn build(mtm: MainThreadMarker, target: &Controller) -> Settings {
     place(&clock, row + 1, control_x, control_w);
 
     // SAFETY: as above.
+    let menu_bar = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            ns_string!("Match menu bar to theme"),
+            Some(target),
+            Some(sel!(toggleMatchMenuBar:)),
+            mtm,
+        )
+    };
+    menu_bar.setToolTip(Some(ns_string!(
+        "Removes the pale strip behind the menu bar: the wallpaper stops below it, and the \
+         desktop picture is set to the theme's background color. Your own picture comes back \
+         when you turn this off or quit."
+    )));
+    place(&menu_bar, row + 2, control_x, control_w);
+
+    // SAFETY: as above.
     let (reset, close) = unsafe {
         (
             NSButton::buttonWithTitle_target_action(
@@ -394,5 +413,6 @@ fn build(mtm: MainThreadMarker, target: &Controller) -> Settings {
         sliders,
         fps,
         clock,
+        menu_bar,
     }
 }

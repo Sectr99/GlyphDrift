@@ -140,6 +140,8 @@ pub struct Topographic {
     half: (f32, f32),
     /// Time and date, when the clock is on.
     clock: Option<[String; 2]>,
+    /// A box to flow around instead of the clock's (center, half-size), without a clock.
+    keep_clear: Option<((f32, f32), (f32, f32))>,
 }
 
 impl Topographic {
@@ -147,21 +149,27 @@ impl Topographic {
         Self::default()
     }
 
-    /// Where (x, y) samples the terrain: outside the clock box, pulled toward its center
-    /// (fully at the edge, fading with distance); inside, None. Identity without the clock.
+    /// The box the contours flow around: the kept-clear one, else the clock's when it's on.
+    fn reserved(&self) -> Option<((f32, f32), (f32, f32))> {
+        self.keep_clear
+            .or_else(|| self.clock.as_ref().map(|_| (self.center, self.half)))
+    }
+
+    /// Where (x, y) samples the terrain: outside the reserved box, pulled toward its center
+    /// (fully at the edge, fading with distance); inside, None. Identity without a box.
     fn warp(&self, x: f32, y: f32) -> Option<(f32, f32)> {
-        if self.clock.is_none() {
+        let Some((center, half)) = self.reserved() else {
             return Some((x, y));
-        }
-        let (qx, qy) = (x - self.center.0, y - self.center.1);
-        let (ux, uy) = (qx / self.half.0, qy / self.half.1);
+        };
+        let (qx, qy) = (x - center.0, y - center.1);
+        let (ux, uy) = (qx / half.0, qy / half.1);
         // Superellipse radius: 1 on the rounded-box boundary.
         let rho = (ux.powi(4) + uy.powi(4)).sqrt().sqrt();
         if rho <= 1.0 {
             return None;
         }
         let k = (rho - 1.0 / (rho * rho)) / rho; // 0 at the edge, toward 1 far away
-        Some((self.center.0 + qx * k, self.center.1 + qy * k))
+        Some((center.0 + qx * k, center.1 + qy * k))
     }
 }
 
@@ -188,13 +196,16 @@ impl Animation for Topographic {
             self.clock = clock.cloned();
         }
     }
+    fn set_keep_clear(&mut self, area: Option<((f32, f32), (f32, f32))>) {
+        self.keep_clear = area.filter(|(_, half)| half.0 > 0.0 && half.1 > 0.0);
+    }
     fn draw(&self, out: &mut Vec<Shape>) {
         const LEVELS: i32 = 16; // contour interval: 1/LEVELS of the range per side
         let unit = self.unit;
         let pen = Pen::new(unit);
         let (scale, drift, morph) = (1.0 / (unit * 0.45), self.t * 0.012, self.t * 0.035);
         let height = |x: f32, y: f32| fbm3(x * scale + drift, y * scale, morph);
-        let (cx, cy) = self.center;
+        let (cx, cy) = self.reserved().map_or(self.center, |(c, _)| c);
         let inside = height(cx, cy); // flat inside the box, so no lines cross it
         let grid = Field::sample(
             self.w,
@@ -225,7 +236,8 @@ impl Animation for Topographic {
                 level,
             }));
         }
-        if let Some([time, date]) = &self.clock {
+        // The clock, unless a kept-clear box has taken its place.
+        if let (Some([time, date]), None) = (&self.clock, self.keep_clear) {
             let (hw, hh) = self.half;
             // Corner brackets inside the rounded boundary.
             let (bx, by, arm) = (hw * 0.8, hh * 0.78, hh * 0.22);
@@ -502,6 +514,41 @@ impl Animation for Ink {
 mod tests {
     use super::*;
     use crate::anim::Rect;
+
+    #[test]
+    fn topo_lines_flow_around_a_kept_clear_box() {
+        // The website header: an off-center logo box, no clock drawn even if one is set.
+        let mut t = Topographic::new();
+        t.init(
+            Size {
+                cols: 200,
+                rows: 60,
+                width: 1600.0,
+                height: 1000.0,
+                focus: Rect::new(0.0, 0.0, 1600.0, 1000.0),
+            },
+            5,
+        );
+        let (center, half) = ((700.0, 380.0), (270.0, 95.0));
+        t.set_keep_clear(Some((center, half)));
+        t.set_clock(Some(&["12:34".into(), "Saturday".into()]));
+        for _ in 0..4 {
+            t.update(9.0);
+            let mut out = Vec::new();
+            t.draw(&mut out);
+            assert!(out.iter().all(|s| !matches!(s, Shape::Text { .. })));
+            assert!(out.iter().any(|s| matches!(s, Shape::Curve { .. })));
+            for s in &out {
+                if let Shape::Curve { points, .. } = s {
+                    for &p in points {
+                        let (ux, uy) = ((p.0 - center.0) / half.0, (p.1 - center.1) / half.1);
+                        let inside = ux.powi(4) + uy.powi(4) < 0.5; // one cell of slack
+                        assert!(!inside, "contour point {p:?} inside the kept-clear box");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn topo_lines_flow_around_the_clock_box() {

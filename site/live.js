@@ -68,7 +68,9 @@ export class Live {
    *          objectZoom?: number, clock?: boolean, speed?: number}} o  `width` x `height`
    *   is the simulated scene in px; the canvas shows all of it at whatever size it is.
    *   `speed` is the app's Speed setting (1 = normal); the warm-up runs at normal speed,
-   *   so the first frame still matches the screenshot.
+   *   so the first frame still matches the screenshot. `seed` picks the starting point
+   *   (the screenshots use 42). `keepClear` ({cx, cy, hw, hh}, px) is a box Topographic
+   *   drift flows around, as the header does around the logo.
    */
   constructor(canvas, o) {
     this.canvas = canvas;
@@ -86,7 +88,11 @@ export class Live {
     this.cols = Math.max(1, Math.floor(this.w / this.cellW));
     this.rows = Math.max(1, Math.floor(this.h / this.cellH));
     this.ptr = withString(o.anim, (p, n) =>
-      wasm.gd_new(p, n, this.cols, this.rows, this.w, this.h, zoom, o.objectZoom ?? 1, SEED));
+      wasm.gd_new(p, n, this.cols, this.rows, this.w, this.h, zoom, o.objectZoom ?? 1, o.seed ?? SEED));
+    if (o.keepClear) {
+      const k = o.keepClear;
+      wasm.gd_set_keep_clear(this.ptr, k.cx, k.cy, k.hw, k.hh);
+    }
     this.fps = Math.min(wasm.gd_fps(this.ptr), 30);
     this.colors = palette(o.theme, wasm.gd_warm(this.ptr));
     this.clock = o.clock ?? false;

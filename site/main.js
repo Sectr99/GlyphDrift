@@ -1,5 +1,6 @@
-// Glyphdrift landing page: a live port of the app's Topographic drift (contour lines of
-// drifting value noise, warped around the logo box) and the theme picker.
+// Glyphdrift landing page: the theme picker, downloads, image viewer, and the app's own
+// animations through live.js (WebAssembly): Topographic drift in the header, flowing around
+// the logo box, and the gallery previews.
 
 // [label, background, [dim, mid, bright], config name] — the cool gradients from src/theme.rs.
 const THEMES = [
@@ -32,155 +33,10 @@ const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 const css = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 
-/** Color at brightness t (0..1): background, then through the three stops, as the app does. */
-function shade(theme, t) {
-  const pts = [rgb(theme[1]), ...theme[2].map(rgb)];
-  const x = Math.min(Math.max(t, 0), 1) * 3;
-  const i = Math.min(Math.floor(x), 2);
-  return mix(pts[i], pts[i + 1], x - i);
-}
-
-// ---------------------------------------------------------------------------------------
-// Value noise (same construction as src/anim/contour.rs, with a 32-bit hash)
-
-function corner(x, y, z) {
-  let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(z, 0x9e3779b1);
-  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-  h ^= h >>> 16;
-  return (h & 0xffff) / 32767.5 - 1;
-}
-
-function noise3(x, y, z) {
-  const xf = Math.floor(x), yf = Math.floor(y), zf = Math.floor(z);
-  const s = (t) => t * t * (3 - 2 * t);
-  const u = s(x - xf), v = s(y - yf), w = s(z - zf);
-  const lerp = (a, b, t) => a + (b - a) * t;
-  const plane = (dz) =>
-    lerp(
-      lerp(corner(xf, yf, zf + dz), corner(xf + 1, yf, zf + dz), u),
-      lerp(corner(xf, yf + 1, zf + dz), corner(xf + 1, yf + 1, zf + dz), u),
-      v
-    );
-  return lerp(plane(0), plane(1), w);
-}
-
-function fbm3(x, y, z) {
-  return (
-    (noise3(x, y, z) + 0.5 * noise3(2 * x + 17.3, 2 * y, z * 1.3) + 0.25 * noise3(4 * x, 4 * y + 31.7, z * 1.7)) /
-    1.75
-  );
-}
-
-// ---------------------------------------------------------------------------------------
-// Terrain
-
 const canvas = document.getElementById("terrain");
-const ctx = canvas.getContext("2d");
 const markBox = document.querySelector(".mark");
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-const LEVELS = 16; // contour interval: 1/LEVELS of the height range per side
-const CELL = 12; // CSS px between field samples
 let theme = THEMES.find((t) => t[0] === DEFAULT_THEME);
-let W = 0, H = 0, unit = 1, box = { cx: 0, cy: 0, hw: 1, hh: 1 };
-let t0 = performance.now() / 1000 - 400 - Math.random() * 400;
-
-function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  W = canvas.clientWidth;
-  H = canvas.clientHeight;
-  canvas.width = Math.round(W * dpr);
-  canvas.height = Math.round(H * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  unit = Math.max(Math.min(W, H), 320);
-  const c = canvas.getBoundingClientRect(), b = markBox.getBoundingClientRect();
-  box = { cx: b.left - c.left + b.width / 2, cy: b.top - c.top + b.height / 2, hw: b.width / 2, hh: b.height / 2 };
-}
-
-/** Where terrain point (x, y) samples from: pulled toward the box center near the box
- *  (fully at its rounded edge, fading with distance); null inside it. */
-function warp(x, y) {
-  const qx = x - box.cx, qy = y - box.cy;
-  const ux = qx / box.hw, uy = qy / box.hh;
-  const rho = Math.sqrt(Math.sqrt(ux ** 4 + uy ** 4));
-  if (rho <= 1) return null;
-  const k = (rho - 1 / (rho * rho)) / rho;
-  return [box.cx + qx * k, box.cy + qy * k];
-}
-
-// Marching-squares segments per case (edges: 0 top, 1 right, 2 bottom, 3 left).
-// Corner bits: top-left 8, top-right 4, bottom-right 2, bottom-left 1. Saddles (5, 10) are
-// resolved by the cell center below.
-const CASES = [[], [[3, 2]], [[2, 1]], [[3, 1]], [[0, 1]], null, [[0, 2]], [[3, 0]],
-  [[3, 0]], [[0, 2]], null, [[0, 1]], [[3, 1]], [[2, 1]], [[3, 2]], []];
-
-function draw(now) {
-  const t = now / 1000 - t0;
-  const scale = 1 / (unit * 0.45), drift = t * 0.02, morph = t * 0.05;
-  const height = (x, y) => fbm3(x * scale + drift, y * scale, morph);
-  const nx = Math.ceil(W / CELL) + 1, ny = Math.ceil(H / CELL) + 1;
-  const field = new Float32Array(nx * ny);
-  const inside = height(box.cx, box.cy); // flat inside the box: no lines cross it
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      const p = warp(i * CELL, j * CELL);
-      field[j * nx + i] = p ? height(p[0], p[1]) : inside;
-    }
-  }
-
-  ctx.fillStyle = theme[1];
-  ctx.fillRect(0, 0, W, H);
-  ctx.lineCap = "round";
-  const hair = Math.max(unit / 1440, 0.75), heavy = hair * 2.2;
-  for (let k = -LEVELS; k <= LEVELS; k++) {
-    const level = (k / LEVELS) * 0.8;
-    const index = k % 5 === 0; // heavier index contour, as on a survey map
-    const h = (level / 0.8 + 1) / 2; // 0 low .. 1 high
-    ctx.strokeStyle = css(shade(theme, (40 + 150 * h + (index ? 40 : 0)) / 255));
-    ctx.lineWidth = index ? heavy : hair;
-    ctx.beginPath();
-    for (let j = 0; j < ny - 1; j++) {
-      for (let i = 0; i < nx - 1; i++) {
-        const tl = field[j * nx + i], tr = field[j * nx + i + 1];
-        const br = field[(j + 1) * nx + i + 1], bl = field[(j + 1) * nx + i];
-        const c = (tl > level) * 8 + (tr > level) * 4 + (br > level) * 2 + (bl > level);
-        if (c === 0 || c === 15) continue;
-        let segs = CASES[c];
-        if (!segs) {
-          const high = (tl + tr + br + bl) / 4 > level;
-          segs = c === 5 ? (high ? [[3, 0], [2, 1]] : [[3, 2], [0, 1]])
-            : (high ? [[0, 1], [3, 2]] : [[3, 0], [2, 1]]);
-        }
-        const x = i * CELL, y = j * CELL;
-        const cross = (a, b) => Math.min(Math.max((level - a) / (b - a), 0), 1);
-        const edge = (e) =>
-          e === 0 ? [x + CELL * cross(tl, tr), y]
-            : e === 1 ? [x + CELL, y + CELL * cross(tr, br)]
-              : e === 2 ? [x + CELL * cross(bl, br), y + CELL]
-                : [x, y + CELL * cross(tl, bl)];
-        for (const [ea, eb] of segs) {
-          const a = edge(ea), b = edge(eb);
-          ctx.moveTo(a[0], a[1]);
-          ctx.lineTo(b[0], b[1]);
-        }
-      }
-    }
-    ctx.stroke();
-  }
-}
-
-// ~30 fps while the hero is on screen; one still frame for reduced motion.
-let visible = true, last = 0;
-function frame(now) {
-  if (visible && now - last >= 33) {
-    last = now;
-    draw(now);
-  }
-  if (!reduceMotion) requestAnimationFrame(frame);
-}
-new IntersectionObserver(([e]) => (visible = e.isIntersecting)).observe(canvas);
-window.addEventListener("resize", () => { resize(); draw(performance.now()); });
 
 // ---------------------------------------------------------------------------------------
 // Themes
@@ -201,7 +57,6 @@ function applyTheme(t, save) {
   if (save) {
     try { localStorage.setItem("glyphdrift-theme", t[0]); } catch { /* storage unavailable */ }
   }
-  draw(performance.now());
   recolorLive();
 }
 
@@ -407,17 +262,60 @@ function stopLive() {
   viewerLive = null;
 }
 
-/** Redraw every preview in the current theme. */
+/** Redraw every preview, and the header, in the current theme. */
 function recolorLive() {
   if (!live) return;
   for (const link of gallery) link.live?.setTheme(theme[3]);
   viewerLive?.setTheme(theme[3]);
+  header?.setTheme(theme[3]);
 }
+
+// ---------------------------------------------------------------------------------------
+// Header: Topographic drift at the app's own speed, flowing around the logo box, from a
+// random starting point each visit. It moves while on screen; one still frame for reduced
+// motion. A resize starts it again at the new size.
+
+let header = null;
+let headerOnScreen = true;
+const headerSeed = Math.floor(Math.random() * 1000);
+
+function startHeader() {
+  if (!live) return;
+  if (header) {
+    live.player.stop(header);
+    header.dispose();
+  }
+  const c = canvas.getBoundingClientRect(), b = markBox.getBoundingClientRect();
+  header = new live.Live(canvas, {
+    anim: "topo", theme: theme[3], seed: headerSeed,
+    width: Math.max(1, Math.round(c.width)), height: Math.max(1, Math.round(c.height)),
+    keepClear: {
+      cx: b.left - c.left + b.width / 2, cy: b.top - c.top + b.height / 2,
+      hw: b.width / 2, hh: b.height / 2,
+    },
+  });
+  header.draw();
+  if (!reduceMotion && headerOnScreen) live.player.start(header);
+}
+
+new IntersectionObserver(([e]) => {
+  headerOnScreen = e.isIntersecting;
+  if (!header || reduceMotion) return;
+  if (headerOnScreen) live.player.start(header);
+  else live.player.stop(header);
+}).observe(canvas);
+
+let resizeTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(startHeader, 150);
+});
 
 if ("IntersectionObserver" in window) {
   import("./live.js").then(async ({ load, Live, Player }) => {
     if (!(await load())) return;
     live = { Live, player: new Player() };
+    startHeader();
     // Draw each card's first frame as it comes into view.
     const seen = new IntersectionObserver((entries) => {
       for (const e of entries) if (e.isIntersecting) showCard(e.target);
@@ -435,6 +333,4 @@ if ("IntersectionObserver" in window) {
 
 let saved = null;
 try { saved = localStorage.getItem("glyphdrift-theme"); } catch { /* storage unavailable */ }
-resize();
 applyTheme(THEMES.find((t) => t[0] === saved) || theme, false);
-requestAnimationFrame(frame);

@@ -36,6 +36,7 @@ sed "s/VERSION/$version/g" macos/Info.plist > "$app/Contents/Info.plist"
 # open (right-click > Open, or System Settings > Privacy & Security > Open Anyway).
 codesign --force --sign - "$app"
 
-(cd dist && ditto -c -k --keepParent Glyphdrift.app "Glyphdrift-$version-macos.zip")
-shasum -a 256 "dist/Glyphdrift-$version-macos.zip"
+# A fixed name, so releases/latest/download/Glyphdrift-macos.zip always works.
+(cd dist && ditto -c -k --keepParent Glyphdrift.app Glyphdrift-macos.zip)
+shasum -a 256 dist/Glyphdrift-macos.zip
 echo "Built $app ($version)"

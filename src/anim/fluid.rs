@@ -108,15 +108,17 @@ impl Animation for LavaLamp {
         }
         // Edge and halo.
         let grid = Field::sample(self.w, self.h, pen.px(9.0).max(MIN_CELL), field);
-        for (level, weight, brightness) in [(1.0, MID, 210), (0.62, HAIR, 70)] {
-            grid.contour(level, |a, b| {
-                out.push(Shape::Line {
-                    a,
-                    b,
-                    width: pen.px(weight),
-                    level: brightness,
-                });
-            });
+        let styles = [(HAIR, 70), (MID, 210)]; // halo, edge
+        for (lines, (weight, level)) in grid
+            .polylines_by_level(&[0.62, 1.0])
+            .into_iter()
+            .zip(styles)
+        {
+            out.extend(lines.into_iter().map(|points| Shape::Curve {
+                points,
+                width: pen.px(weight),
+                level,
+            }));
         }
     }
 }
@@ -215,12 +217,13 @@ impl Animation for Topographic {
             })
             .collect();
         let levels: Vec<f32> = styles.iter().map(|s| s.0).collect();
-        for (segments, &(_, width, level)) in grid.segments_by_level(&levels).iter().zip(&styles) {
-            out.extend(
-                segments
-                    .iter()
-                    .map(|&(a, b)| Shape::Line { a, b, width, level }),
-            );
+        for (lines, &(_, width, level)) in grid.polylines_by_level(&levels).into_iter().zip(&styles)
+        {
+            out.extend(lines.into_iter().map(|points| Shape::Curve {
+                points,
+                width,
+                level,
+            }));
         }
         if let Some([time, date]) = &self.clock {
             let (hw, hh) = self.half;
@@ -521,11 +524,8 @@ mod tests {
             assert!(out.iter().any(|s| matches!(s, Shape::Text { .. })));
 
             for s in &out {
-                if let Shape::Line { a, b, level, .. } = *s {
-                    if level == 150 {
-                        continue; // corner brackets
-                    }
-                    for p in [a, b] {
+                if let Shape::Curve { points, .. } = s {
+                    for &p in points {
                         let (ux, uy) = ((p.0 - 800.0) / t.half.0, (p.1 - 500.0) / t.half.1);
                         let inside = ux.powi(4) + uy.powi(4) < 0.5; // one cell of slack
                         assert!(!inside, "contour point {p:?} inside the clock box");

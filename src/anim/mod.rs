@@ -320,6 +320,7 @@ mod tests {
                 .iter()
                 .map(|s| match s {
                     Shape::Line { a, b, .. } => (a.0 + b.0) / 2.0,
+                    Shape::Curve { points, .. } => points[0].0,
                     Shape::Circle { c, .. } => c.0,
                     Shape::Polygon { points, .. } => points[0].0,
                     Shape::Text { c, .. } => c.0,

@@ -89,12 +89,12 @@ fn contours(
             (pen.px(weight), brightness)
         })
         .collect();
-    for (segments, &(width, level)) in field.segments_by_level(levels).iter().zip(&styles) {
-        out.extend(
-            segments
-                .iter()
-                .map(|&(a, b)| Shape::Line { a, b, width, level }),
-        );
+    for (lines, &(width, level)) in field.polylines_by_level(levels).into_iter().zip(&styles) {
+        out.extend(lines.into_iter().map(|points| Shape::Curve {
+            points,
+            width,
+            level,
+        }));
     }
 }
 

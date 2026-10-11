@@ -74,7 +74,7 @@ cargo test --release snapshots -- --ignored --nocapture   # every animation thro
 cargo run --release -- --screenshots <dir>                # website images, drawn offscreen (see below)
 ```
 
-The website's gallery runs the real animations: `web/` compiles them to WebAssembly, and `web/build.sh` writes `site/glyphdrift.wasm` (commit it; the site has no build step). Rebuild it after changing an animation.
+The website's gallery runs the real animations: `web/` compiles them to WebAssembly, and `web/build.sh` writes `site/glyphdrift.wasm` (commit it; the site has no build step). After changing animations, `web/build-assets.sh <name> ...` rebuilds that file and those animations' gallery and viewer images in one go (no names rebuilds every image). Name only the animations that changed: each image regeneration adds to the git history.
 
 `--screenshots` writes a gallery image of every animation, the Settings window, and the Settings window over Cubes. Everything is drawn offscreen with built-in settings and a fixed clock: nothing is read from the screen, your config or your desktop, and a running Glyphdrift is left alone.
 

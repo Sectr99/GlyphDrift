@@ -71,7 +71,10 @@ cargo run                  # run from the terminal; logs to the console
 macos/bundle.sh            # dist/Glyphdrift.app and a zip, universal (needs both macOS targets)
 macos/bundle.sh --native   # this Mac's architecture only
 cargo test --release snapshots -- --ignored --nocapture   # every animation through Metal, to target/snapshots
+cargo run --release -- --screenshots <dir>                # website images, drawn offscreen (see below)
 ```
+
+`--screenshots` writes a gallery image of every animation, the Settings window, and the Settings window over Cubes. Everything is drawn offscreen with built-in settings and a fixed clock: nothing is read from the screen, your config or your desktop, and a running Glyphdrift is left alone.
 
 To check the Windows build from a Mac: `rustup target add x86_64-pc-windows-msvc`, then `cargo clippy --target x86_64-pc-windows-msvc --all-targets`.
 

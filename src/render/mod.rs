@@ -10,8 +10,9 @@ use crate::theme;
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW,
-    D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
+    D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+    D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
@@ -388,6 +389,48 @@ impl Renderer {
                                 DWRITE_MEASURING_MODE_NATURAL,
                             );
                         }
+                    }
+                    Shape::Curve { width, level, .. } if level > 0 => {
+                        // Consecutive curves that look the same share one path.
+                        let color = level_index(level);
+                        let start = i - 1;
+                        while let Some(Shape::Curve {
+                            width: w, level: l, ..
+                        }) = shapes.get(i)
+                        {
+                            if *w != width || *l == 0 || level_index(*l) != color {
+                                break;
+                            }
+                            i += 1;
+                        }
+                        let geom = self.factory.CreatePathGeometry()?;
+                        let sink = geom.Open()?;
+                        for curve in &shapes[start..i] {
+                            let Shape::Curve { ref points, .. } = *curve else {
+                                continue;
+                            };
+                            if points.len() < 2 {
+                                continue;
+                            }
+                            let (segments, closed) = crate::shape::catmull_rom(points);
+                            let beziers: Vec<D2D1_BEZIER_SEGMENT> = segments
+                                .iter()
+                                .map(|s| D2D1_BEZIER_SEGMENT {
+                                    point1: pt(s[0]),
+                                    point2: pt(s[1]),
+                                    point3: pt(s[2]),
+                                })
+                                .collect();
+                            sink.BeginFigure(pt(points[0]), D2D1_FIGURE_BEGIN_HOLLOW);
+                            sink.AddBeziers(&beziers);
+                            sink.EndFigure(if closed {
+                                D2D1_FIGURE_END_CLOSED
+                            } else {
+                                D2D1_FIGURE_END_OPEN
+                            });
+                        }
+                        sink.Close()?;
+                        t.rt.DrawGeometry(&geom, &t.brushes[color], width, None);
                     }
                     _ => {} // level 0 is invisible
                 }

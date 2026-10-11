@@ -57,7 +57,9 @@ impl Field {
         top + (bottom - top) * v
     }
 
-    /// Call `emit(a, b)` for each segment of the iso-line at `level`.
+    /// Call `emit(a, b)` for each segment of the iso-line at `level` (tests compare with
+    /// `contours`).
+    #[cfg(test)]
     pub fn contour(&self, level: f32, mut emit: impl FnMut(P, P)) {
         for j in 0..self.ny.saturating_sub(1) {
             for i in 0..self.nx.saturating_sub(1) {
@@ -91,11 +93,14 @@ impl Field {
         }
     }
 
-    /// Segments of each ascending `levels[k]`, grouped by level.
-    pub fn segments_by_level(&self, levels: &[f32]) -> Vec<Vec<Segment>> {
-        let mut out = vec![Vec::new(); levels.len()];
-        self.contours(levels, |k, a, b| out[k].push((a, b)));
-        out
+    /// The iso-lines of each ascending `levels[k]` as polylines for smooth curves: chained,
+    /// then thinned (see `thin`).
+    pub fn polylines_by_level(&self, levels: &[f32]) -> Vec<Vec<Vec<P>>> {
+        let mut segs = vec![Vec::new(); levels.len()];
+        self.contours(levels, |k, a, b| segs[k].push((a, b)));
+        segs.iter()
+            .map(|s| chain(s).into_iter().map(|l| thin(l, self.cell)).collect())
+            .collect()
     }
 
     /// Marching squares for one cell; saddles resolved by the center value.
@@ -151,6 +156,103 @@ impl Field {
     }
 }
 
+/// A cheap hasher for exact point keys (std's SipHash is several times slower here).
+#[derive(Default)]
+struct PointHasher(u64);
+
+impl std::hash::Hasher for PointHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u32(b as u32);
+        }
+    }
+    fn write_u32(&mut self, x: u32) {
+        self.0 = (self.0.rotate_left(5) ^ x as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+/// Join segments that share endpoints into polylines; a closed loop ends at its first
+/// point. Endpoints must match exactly, as `Field` produces them.
+pub fn chain(segs: &[Segment]) -> Vec<Vec<P>> {
+    use std::collections::HashMap;
+    use std::hash::BuildHasherDefault;
+    const NONE: usize = usize::MAX;
+    let key = |p: P| (p.0.to_bits(), p.1.to_bits());
+    // Each contour point joins at most two segments.
+    let mut at: HashMap<(u32, u32), [usize; 2], BuildHasherDefault<PointHasher>> =
+        HashMap::with_capacity_and_hasher(segs.len() * 2, Default::default());
+    for (k, &(a, b)) in segs.iter().enumerate() {
+        for p in [a, b] {
+            let slot = at.entry(key(p)).or_insert([NONE; 2]);
+            if slot[0] == NONE {
+                slot[0] = k;
+            } else {
+                slot[1] = k;
+            }
+        }
+    }
+    let mut used = vec![false; segs.len()];
+    // Extend `line` from its last point while an unused segment continues it.
+    let extend = |line: &mut Vec<P>, used: &mut Vec<bool>| loop {
+        let end = *line.last().unwrap();
+        let Some(&k) = at
+            .get(&key(end))
+            .and_then(|s| s.iter().find(|&&k| k != NONE && !used[k]))
+        else {
+            break;
+        };
+        used[k] = true;
+        let (a, b) = segs[k];
+        line.push(if key(a) == key(end) { b } else { a });
+    };
+    let mut out = Vec::new();
+    for k in 0..segs.len() {
+        if used[k] {
+            continue;
+        }
+        used[k] = true;
+        let mut line = vec![segs[k].0, segs[k].1];
+        extend(&mut line, &mut used);
+        line.reverse();
+        extend(&mut line, &mut used);
+        out.push(line);
+    }
+    out
+}
+
+/// About every other point of a contour polyline (grid spacing `cell`), for half the
+/// drawing cost; a smooth curve through the rest still follows it. Which points stay
+/// depends only on where they sit on the grid, never on where the chain starts, so the
+/// same points survive from frame to frame and the curve doesn't wobble. Ends are kept
+/// (closed loops stay closed), never two points in a row are dropped, short lines keep
+/// everything, and near-duplicate points (a contour grazing a grid corner) are merged.
+pub fn thin(line: Vec<P>, cell: f32) -> Vec<P> {
+    let n = line.len();
+    let checkerboard =
+        |p: P| ((p.0 / cell).floor() as i64 + (p.1 / cell).floor() as i64).rem_euclid(2) == 0;
+    let near = cell * 0.15;
+    let mut out: Vec<P> = Vec::with_capacity(n / 2 + 2);
+    let mut dropped = false;
+    for (k, &p) in line.iter().enumerate() {
+        let end = k == 0 || k == n - 1;
+        if let Some(&q) = out.last() {
+            if !end && (p.0 - q.0).abs() < near && (p.1 - q.1).abs() < near {
+                continue;
+            }
+        }
+        if end || n < 10 || dropped || checkerboard(p) {
+            out.push(p);
+            dropped = false;
+        } else {
+            dropped = true;
+        }
+    }
+    out
+}
+
 /// Smooth 3D value noise in -1..1.
 pub fn noise3(x: f32, y: f32, z: f32) -> f32 {
     let (xf, yf, zf) = (x.floor(), y.floor(), z.floor());
@@ -183,6 +285,41 @@ pub fn fbm3(x: f32, y: f32, z: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_circle_chains_into_one_closed_polyline() {
+        let f = Field::sample(100.0, 100.0, 5.0, |x, y| {
+            ((x - 50.0).powi(2) + (y - 50.0).powi(2)).sqrt()
+        });
+        let mut segs = Vec::new();
+        // 20.3, not 20: a level exactly at sample points makes ambiguous corners.
+        f.contour(20.3, |a, b| segs.push((a, b)));
+        let lines = chain(&segs);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), segs.len() + 1);
+        assert_eq!(lines[0].first(), lines[0].last(), "closed");
+        let thinned = thin(lines[0].clone(), 5.0);
+        assert!(thinned.len() < lines[0].len() * 2 / 3, "{}", thinned.len());
+        assert_eq!(thinned.first(), thinned.last(), "still closed");
+        // The same points survive wherever the chain starts.
+        let mut rotated = lines[0][7..].to_vec();
+        rotated.extend_from_slice(&lines[0][1..=7]);
+        let interior = |l: &[P]| -> Vec<(u32, u32)> {
+            let mut v: Vec<_> = l[1..l.len() - 1]
+                .iter()
+                .map(|p| (p.0.to_bits(), p.1.to_bits()))
+                .collect();
+            v.sort();
+            v
+        };
+        let (a, b) = (interior(&thinned), interior(&thin(rotated, 5.0)));
+        let common = a.iter().filter(|p| b.binary_search(p).is_ok()).count();
+        assert!(
+            common + 4 >= a.len(),
+            "{common} of {} kept points shared",
+            a.len()
+        );
+    }
 
     #[test]
     fn value_at_interpolates_between_samples() {

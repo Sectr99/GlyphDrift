@@ -53,6 +53,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "glyphdrift-saver"
+version = "0.2.3"
+dependencies = [
+ "glyphdrift",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-screen-saver",
+]
+
+[[package]]
 name = "glyphdrift-web"
 version = "0.1.0"
 dependencies = [
@@ -264,6 +275,17 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation",
  "objc2-metal",
+]
+
+[[package]]
+name = "objc2-screen-saver"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99bd4e20d51e655ecad5d7965b3af205835ec83093d869b5b4f3e7131f10a862"
+dependencies = [
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
 ]
 
 [[package]]

@@ -7,7 +7,8 @@ mod desktop;
 mod menu;
 mod picture;
 mod power;
-mod render;
+pub mod render;
+mod saver;
 mod screenshots;
 mod settings;
 
@@ -155,8 +156,11 @@ impl App {
             .fold(1.0, f64::max);
         if max_scale != self.renderer_scale {
             self.renderer_scale = max_scale;
-            self.renderer
-                .set_font(&self.cfg.font.family, font_size(&self.cfg), max_scale);
+            self.renderer.set_font(
+                &self.cfg.font.family,
+                engine::font_size(&self.cfg),
+                max_scale,
+            );
         }
         for screen in screens.iter() {
             let scale = screen.backingScaleFactor();
@@ -374,7 +378,7 @@ impl App {
         if c.font {
             self.renderer.set_font(
                 &self.cfg.font.family,
-                font_size(&self.cfg),
+                engine::font_size(&self.cfg),
                 self.renderer_scale,
             );
         }
@@ -549,6 +553,11 @@ define_class!(
             with_app(App::toggle_lock_screen);
         }
 
+        #[unsafe(method(installScreenSaver:))]
+        fn install_screen_saver(&self, _sender: Option<&AnyObject>) {
+            saver::install();
+        }
+
         #[unsafe(method(toggleMatchMenuBar:))]
         fn toggle_match_menu_bar(&self, _sender: Option<&AnyObject>) {
             with_app(App::toggle_match_menu_bar);
@@ -653,13 +662,6 @@ impl Controller {
     }
 }
 
-/// The renderer's font size in points, times the overall scale.
-fn font_size(cfg: &Config) -> f64 {
-    (cfg.font.size as f64 * cfg.general.scale as f64)
-        .round()
-        .max(4.0)
-}
-
 thread_local! {
     /// Time, long date and log timestamp formatters.
     static FORMATTERS: OnceCell<[Retained<NSDateFormatter>; 3]> = const { OnceCell::new() };
@@ -686,7 +688,7 @@ fn format_now(which: usize) -> String {
 }
 
 /// Local time (no seconds) and long date, in the user's format.
-fn local_clock() -> [String; 2] {
+pub fn local_clock() -> [String; 2] {
     [format_now(0), format_now(1)]
 }
 
@@ -730,6 +732,7 @@ pub fn run() -> Result<(), String> {
         return Ok(());
     }
     crate::log::init();
+    saver::update();
     let first_run = config::create_if_missing();
     let (cfg, warnings) = config::load();
     for w in &warnings {
@@ -754,7 +757,7 @@ pub fn run() -> Result<(), String> {
     let t = &THEMES[theme::index_of(&cfg.theme.name)];
     let renderer = Renderer::new(
         &cfg.font.family,
-        font_size(&cfg),
+        engine::font_size(&cfg),
         1.0,
         t.bg,
         &t.cool,

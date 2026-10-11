@@ -125,6 +125,13 @@ pub fn frame_rate(cfg: &Config, animation_fps: u32) -> u32 {
     .max(1)
 }
 
+/// The grid font's size in points: the config's, times the overall scale.
+pub fn font_size(cfg: &Config) -> f64 {
+    (cfg.font.size as f64 * cfg.general.scale as f64)
+        .round()
+        .max(4.0)
+}
+
 /// Tray or menu bar hover text: animation and theme, or why it's paused.
 pub fn status(cfg: &Config, user_paused: bool, auto_paused: Option<&str>) -> String {
     if user_paused {

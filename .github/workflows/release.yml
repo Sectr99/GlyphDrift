@@ -1,5 +1,6 @@
 # Push a version tag (git tag v0.1.4 && git push origin v0.1.4) to build both platforms
-# and create a draft release with glyphdrift.exe, the macOS zip and SHA-256 checksums.
+# and create a draft release with glyphdrift.exe, Glyphdrift-macos.zip and SHA-256
+# checksums. Both keep fixed names, so releases/latest/download/<name> links stay valid.
 # Review the draft's notes on GitHub, then publish it.
 name: Release
 
@@ -58,7 +59,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: dist/Glyphdrift-${{ needs.version.outputs.version }}-macos.zip
+          path: dist/Glyphdrift-macos.zip
           if-no-files-found: error
 
   publish:
@@ -79,12 +80,12 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           cd assets
-          sha256sum glyphdrift.exe "Glyphdrift-$VERSION-macos.zip" > SHA256SUMS.txt
+          sha256sum glyphdrift.exe Glyphdrift-macos.zip > SHA256SUMS.txt
           {
             echo "## Downloads"
             echo
             echo "- **Windows 10/11:** \`glyphdrift.exe\`. Not code-signed yet, so SmartScreen may warn on first run."
-            echo "- **macOS 12+ (Apple silicon and Intel):** \`Glyphdrift-$VERSION-macos.zip\`. Not notarized yet: right-click Glyphdrift.app and choose **Open** the first time."
+            echo "- **macOS 12+ (Apple silicon and Intel):** \`Glyphdrift-macos.zip\`. Not notarized yet: right-click Glyphdrift.app and choose **Open** the first time."
             echo
             echo "## SHA-256"
             echo
@@ -97,4 +98,4 @@ jobs:
             --draft \
             --title "Glyphdrift $VERSION" \
             --notes-file notes.md \
-            glyphdrift.exe "Glyphdrift-$VERSION-macos.zip" SHA256SUMS.txt
+            glyphdrift.exe Glyphdrift-macos.zip SHA256SUMS.txt

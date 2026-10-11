@@ -59,8 +59,8 @@ code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
 .mark {
   position: relative;
   /* Matches the box the terrain warps around (see main.js). */
-  width: min(440px, calc(100vw - 32px));
-  height: min(190px, calc((100vw - 32px) * 0.43));
+  width: min(540px, calc(100vw - 32px));
+  height: min(190px, calc((100vw - 32px) * 0.36));
   display: grid;
   place-content: center;
   text-align: center;
@@ -71,9 +71,10 @@ code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
 .tr { right: 10%; top: 11%; border-right-width: 1.5px; border-top-width: 1.5px; }
 .bl { left: 10%; bottom: 11%; border-left-width: 1.5px; border-bottom-width: 1.5px; }
 .br { right: 10%; bottom: 11%; border-right-width: 1.5px; border-bottom-width: 1.5px; }
-.mark { justify-items: center; gap: 14px; }
-.logo { width: clamp(30px, 5vw, 44px); height: auto; color: var(--accent); }
-.wordmark { margin: 0; font-weight: 300; font-size: clamp(40px, 8vw, 76px); line-height: 1; letter-spacing: 0.01em; }
+.mark { grid-auto-flow: column; align-items: center; gap: 0.3em; font-size: clamp(34px, 8vw, 68px); }
+/* Sized in em so the logo stays as tall as the wordmark's capitals at every width. */
+.logo { width: 0.74em; height: auto; color: var(--accent); }
+.wordmark { margin: 0; font-weight: 600; font-size: 1em; line-height: 1; letter-spacing: -0.01em; }
 
 .hero-copy {
   position: absolute;

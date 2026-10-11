@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Glyphdrift</title>
+  <meta name="description" content="A quiet live wallpaper for Windows: contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.">
+  <meta name="theme-color" content="#000000">
+  <meta property="og:title" content="Glyphdrift">
+  <meta property="og:description" content="A quiet live wallpaper for Windows. One small exe, no installer, no network.">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="#top" aria-label="Glyphdrift home">
+      <img src="icon.svg" alt="" width="22" height="22">
+      <span>Glyphdrift</span>
+    </a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#themes">Themes</a>
+      <a href="#start">Get started</a>
+      <a href="https://github.com/Sectr99/GlyphDrift">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-label="Glyphdrift">
+      <canvas id="terrain" aria-hidden="true"></canvas>
+      <div class="clock" aria-hidden="true">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <div id="time">12:00</div>
+        <div id="date">&nbsp;</div>
+      </div>
+      <div class="hero-copy">
+        <h1>A quiet live wallpaper for Windows</h1>
+        <p>Contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.
+          One small exe. No installer, no account, no network.</p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/Sectr99/GlyphDrift/releases/latest">Download for Windows</a>
+          <a class="button" href="https://github.com/Sectr99/GlyphDrift">View source</a>
+        </div>
+        <p class="fine">Windows 10 and 11 · about 0.7 MB</p>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <h2>Made to stay in the background</h2>
+      <div class="features">
+        <article>
+          <h3>Behind your icons</h3>
+          <p>Draws on the desktop itself, under your icons and windows. An optional readability veil keeps icon labels crisp.</p>
+        </article>
+        <article>
+          <h3>Light on resources</h3>
+          <p>Under 1% CPU at the default frame rate. Pauses itself for fullscreen apps and battery saver, and says so in the tray.</p>
+        </article>
+        <article>
+          <h3>A clock that belongs</h3>
+          <p>Topographic drift can show the time and date in a framed box; the contour lines flow around it.</p>
+        </article>
+        <article>
+          <h3>Tweak it live</h3>
+          <p>Speed, scale, frame rate and theme apply as you drag. The settings window opens by the tray so the wallpaper is your preview.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>22 animations</h2>
+      <div class="groups">
+        <div><h3>Contour</h3><p>Topographic drift · Ridgelines · Isobars · Wood grain · Interference · Hillshade topo · Dune ripples</p></div>
+        <div><h3>Fluid</h3><p>Lava lamp · Ink in water</p></div>
+        <div><h3>Loops</h3><p>Helix · Wire globe · Dot wave · Cubes · Sunburst · Moon</p></div>
+        <div><h3>ASCII</h3><p>Matrix rain · Plasma · Fire · Waves · Ripples · Wind</p></div>
+        <div><h3>Graphics</h3><p>Constellation · Flow field</p></div>
+      </div>
+    </section>
+
+    <section id="themes" class="section">
+      <h2>Themes you already use</h2>
+      <p class="lede">The palettes of popular editor themes, plus a few terminal classics. Pick one to recolor the header.</p>
+      <div id="swatches" class="swatches"></div>
+    </section>
+
+    <section id="start" class="section">
+      <h2>Get started</h2>
+      <ol class="steps">
+        <li><span>1</span><div><h3>Download</h3><p>Grab <code>glyphdrift.exe</code> from the latest release. There is nothing to install.</p></div></li>
+        <li><span>2</span><div><h3>Run it</h3><p>The wallpaper starts behind your icons and an icon appears in the tray. Windows may warn about an unrecognized app: choose <em>More info</em>, then <em>Run anyway</em>.</p></div></li>
+        <li><span>3</span><div><h3>Make it yours</h3><p>Left-click the tray icon for settings. Turn on <em>Start with Windows</em> from the right-click menu to keep it.</p></div></li>
+      </ol>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Glyphdrift</span>
+    <a href="https://github.com/Sectr99/GlyphDrift">GitHub</a>
+    <a href="https://github.com/Sectr99/GlyphDrift/issues">Report an issue</a>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

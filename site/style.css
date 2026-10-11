@@ -56,7 +56,7 @@ code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
 }
 #terrain { position: absolute; inset: 0; width: 100%; height: 100%; }
 
-.clock {
+.mark {
   position: relative;
   /* Matches the box the terrain warps around (see main.js). */
   width: min(440px, calc(100vw - 32px));
@@ -71,8 +71,9 @@ code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
 .tr { right: 10%; top: 11%; border-right-width: 1.5px; border-top-width: 1.5px; }
 .bl { left: 10%; bottom: 11%; border-left-width: 1.5px; border-bottom-width: 1.5px; }
 .br { right: 10%; bottom: 11%; border-right-width: 1.5px; border-bottom-width: 1.5px; }
-#time { font-weight: 200; font-size: clamp(48px, 9vw, 92px); line-height: 1; letter-spacing: 0.01em; }
-#date { margin-top: 12px; font-size: 13px; letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase; }
+.mark { justify-items: center; gap: 14px; }
+.logo { width: clamp(30px, 5vw, 44px); height: auto; color: var(--accent); }
+.wordmark { margin: 0; font-weight: 300; font-size: clamp(40px, 8vw, 76px); line-height: 1; letter-spacing: 0.01em; }
 
 .hero-copy {
   position: absolute;
@@ -176,7 +177,7 @@ h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
   .nav nav a:not(:last-child) { display: none; }
   .section { padding: 64px 16px 0; }
   .hero-copy { padding: 0 16px 40px; }
-  .clock { margin-bottom: 30vh; }
+  .mark { margin-bottom: 30vh; }
   .groups > div { grid-template-columns: 1fr; gap: 4px; }
   .footer { padding: 24px 16px 32px; }
   .legal { padding: 88px 16px 0; }

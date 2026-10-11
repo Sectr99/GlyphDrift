@@ -24,13 +24,21 @@ pub fn color(c: Rgb) -> Retained<NSColor> {
 }
 
 /// A wallpaper window covering `screen`, showing `target`'s layer behind the desktop icons.
+/// With `below_menu_bar`, it stops at the menu bar: macOS backs the menu bar with a pale
+/// frosted strip wherever a window lies under it, but not over the desktop picture.
 pub fn create(
     mtm: MainThreadMarker,
     screen: &NSScreen,
     target: &Target,
     bg: Rgb,
+    below_menu_bar: bool,
 ) -> Retained<NSWindow> {
-    let frame = screen.frame();
+    let mut frame = screen.frame();
+    if below_menu_bar {
+        // The menu bar's height; 0 when it hides automatically.
+        let top = screen.visibleFrame();
+        frame.size.height = (top.origin.y + top.size.height - frame.origin.y).max(1.0);
+    }
     // SAFETY: standard initializer; the window is kept alive by its `Retained`, so AppKit
     // must not release it on close.
     let window = unsafe {

@@ -29,6 +29,8 @@ pub struct General {
     pub object_scale: f32,
     /// Time and date in Topographic drift.
     pub clock: bool,
+    /// macOS: stop below the menu bar and set the desktop picture to the theme background.
+    pub match_menu_bar: bool,
     pub pause_on_fullscreen: bool,
     pub pause_on_battery_saver: bool,
 }
@@ -67,6 +69,7 @@ impl Default for General {
             scale: 1.0,
             object_scale: 1.0,
             clock: false,
+            match_menu_bar: false,
             pause_on_fullscreen: true,
             pause_on_battery_saver: true,
         }

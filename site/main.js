@@ -117,7 +117,7 @@ const CASES = [[], [[3, 2]], [[2, 1]], [[3, 1]], [[0, 1]], null, [[0, 2]], [[3, 
 
 function draw(now) {
   const t = now / 1000 - t0;
-  const scale = 1 / (unit * 0.45), drift = t * 0.05, morph = t * 0.12;
+  const scale = 1 / (unit * 0.45), drift = t * 0.02, morph = t * 0.05;
   const height = (x, y) => fbm3(x * scale + drift, y * scale, morph);
   const nx = Math.ceil(W / CELL) + 1, ny = Math.ceil(H / CELL) + 1;
   const field = new Float32Array(nx * ny);

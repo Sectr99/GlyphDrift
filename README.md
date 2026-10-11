@@ -1,14 +1,14 @@
 # Glyphdrift
 
-A quiet live wallpaper for Windows 10/11 and macOS 12+: contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.
+A live wallpaper for Windows 10/11 and macOS 12+: contour maps, ASCII art and geometric animations that move slowly behind your desktop icons.
 
 **[glyphdrift.com](https://glyphdrift.com)** · **[Download the latest release](https://github.com/Sectr99/GlyphDrift/releases/latest)**
 
-- Single portable exe (~0.7 MB) on Windows, a small universal app (~0.7 MB zipped) on macOS; no installer, no admin rights, no network access
-- Animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (vector graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (minimal geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour)
-- Themes (22): Matrix, Mono, Amber CRT; Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Everforest, Monokai, Ayu Dark, Night Owl, Palenight, GitHub Dark, Oxocarbon, Poimandres; Synthwave '84, Claude
-- Pauses automatically for fullscreen apps and Windows battery saver; on macOS, while the desktop is covered and in Low Power Mode
-- Light: on an 8-thread CPU at 3440×1440, the ASCII and loop animations use under 1% CPU and the contour and fluid ones 1–3% (Dune ripples about 4.5%); 45–70 MB of memory, most of it the GPU driver. Smaller overall scales draw more detail and cost more
+- **Small:** one portable exe (about 0.7 MB) on Windows and a universal app (about 0.7 MB zipped) on macOS. No installer, no admin rights, and it never connects to the internet.
+- **23 animations:** Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour).
+- **22 themes:** Matrix, Mono, Amber CRT; Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Everforest, Monokai, Ayu Dark, Night Owl, Palenight, GitHub Dark, Oxocarbon, Poimandres; Synthwave '84, Claude.
+- **Pauses itself** while a fullscreen app is open or battery saver is on (Windows), or while the desktop is covered or Low Power Mode is on (macOS).
+- **Low CPU use:** on an 8-thread CPU at 3440×1440, the ASCII and loop animations use under 1% and the contour and fluid ones 1–3% (Dune ripples about 4.5%), with 45–70 MB of memory, most of it the GPU driver. Smaller overall scales draw more detail and cost more.
 
 ## Use
 

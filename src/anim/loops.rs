@@ -44,12 +44,6 @@ fn ramp(a: f32, b: f32, x: f32) -> f32 {
     ease((x - a) / (b - a))
 }
 
-/// Right of center (clear of desktop icons) and slightly high. Only for asymmetric
-/// compositions; balanced ones use `optical_center`.
-fn anchor(f: Rect) -> ((f32, f32), f32) {
-    ((f.x + f.w * 0.56, f.y + f.h * 0.47), f.object_unit())
-}
-
 /// Centered, slightly high so the object doesn't sag.
 pub(super) fn optical_center(f: Rect) -> ((f32, f32), f32) {
     ((f.x + f.w * 0.5, f.y + f.h * 0.47), f.object_unit())
@@ -61,22 +55,8 @@ fn turn(c: (f32, f32), angle: f32, dx: f32, dy: f32) -> (f32, f32) {
     (c.0 + dx * k - dy * s, c.1 + dx * s + dy * k)
 }
 
-/// Points along a rotated ellipse from angle `a0` to `a1`.
-fn arc(c: (f32, f32), rx: f32, ry: f32, rot: f32, a0: f32, a1: f32, n: usize) -> Vec<(f32, f32)> {
-    (0..=n)
-        .map(|i| {
-            let a = a0 + (a1 - a0) * i as f32 / n as f32;
-            turn(c, rot, a.cos() * rx, a.sin() * ry)
-        })
-        .collect()
-}
-
 fn lerp(a: (f32, f32), b: (f32, f32), f: f32) -> (f32, f32) {
     (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
-}
-
-fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
-    ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
 }
 
 /// Draws with weights and spacings given at a 1000 px screen.
@@ -106,76 +86,6 @@ impl Pen {
             width: self.px(weight),
             level,
         });
-    }
-
-    pub(super) fn path(self, out: &mut Vec<Shape>, pts: &[(f32, f32)], weight: f32, level: u8) {
-        for s in pts.windows(2) {
-            self.line(out, s[0], s[1], weight, level);
-        }
-    }
-
-    /// Dashed polyline, pattern continuous across vertices.
-    pub(super) fn dashed(
-        self,
-        out: &mut Vec<Shape>,
-        pts: &[(f32, f32)],
-        dash: f32,
-        gap: f32,
-        weight: f32,
-        level: u8,
-    ) {
-        // State machine, not `%`: each step consumes at least MIN_STEP, so it terminates
-        // (f32 rounding once stalled a `%` version forever).
-        const MIN_STEP: f32 = 1e-3;
-        let (dash, gap) = (self.px(dash).max(0.5), self.px(gap).max(0.5));
-        let (mut on, mut left) = (true, dash);
-        for s in pts.windows(2) {
-            let len = dist(s[0], s[1]);
-            let mut at = 0.0;
-            while len - at > MIN_STEP {
-                let take = left.min(len - at);
-                if on {
-                    let (a, b) = (
-                        lerp(s[0], s[1], at / len),
-                        lerp(s[0], s[1], (at + take) / len),
-                    );
-                    self.line(out, a, b, weight, level);
-                }
-                at += take;
-                left -= take;
-                if left <= MIN_STEP {
-                    on = !on;
-                    left = if on { dash } else { gap };
-                }
-            }
-        }
-    }
-
-    /// Dots spaced evenly along a polyline.
-    pub(super) fn dotted(
-        self,
-        out: &mut Vec<Shape>,
-        pts: &[(f32, f32)],
-        spacing: f32,
-        radius: f32,
-        level: u8,
-    ) {
-        let spacing = self.px(spacing);
-        let mut next = 0.0;
-        let mut walked = 0.0;
-        for s in pts.windows(2) {
-            let len = dist(s[0], s[1]);
-            while next <= walked + len {
-                self.dot(
-                    out,
-                    lerp(s[0], s[1], (next - walked) / len.max(1e-6)),
-                    radius,
-                    level,
-                );
-                next += spacing;
-            }
-            walked += len;
-        }
     }
 
     pub(super) fn dot(self, out: &mut Vec<Shape>, c: (f32, f32), radius: f32, level: u8) {
@@ -242,28 +152,16 @@ impl Pen {
 
 /// Shapes sorted by depth, emitted far to near.
 struct Layers {
-    pen: Pen,
     items: Vec<(f32, Shape)>,
 }
 
 impl Layers {
-    fn new(pen: Pen) -> Self {
-        Self {
-            pen,
-            items: Vec::new(),
-        }
+    fn new() -> Self {
+        Self { items: Vec::new() }
     }
 
     fn push(&mut self, z: f32, s: Shape) {
         self.items.push((z, s));
-    }
-
-    /// Line with weight and brightness from depth `z` (-1 far, 1 near), brightness times `k`.
-    fn depth_line(&mut self, a: (f32, f32), b: (f32, f32), z: f32, k: f32, far: f32, near: f32) {
-        let n = ((z + 1.0) / 2.0).clamp(0.0, 1.0);
-        let level = (shade(z, far, near) as f32 * k) as u8;
-        let width = self.pen.px(HAIR + (HERO - HAIR) * n.powf(1.6));
-        self.push(z, Shape::Line { a, b, width, level });
     }
 
     fn flush(mut self, out: &mut Vec<Shape>) {
@@ -311,78 +209,54 @@ loop_animation!(Sunburst, "sunburst");
 loop_animation!(Moon, "moon");
 
 impl Helix {
-    /// Double helix receding right, with dotted base pairs and a ruler beneath.
+    /// Double helix of dots, level and centered, turning slowly, with fainter dotted base
+    /// pairs. Dot size and brightness come from depth; both ends fade out.
     fn frame(&self, out: &mut Vec<Shape>) {
-        const SAMPLES: usize = 160;
-        const RUNGS: usize = 26;
+        const DOTS: usize = 260; // per strand
+        const RUNGS: usize = 30;
+        const TURNS: f32 = 3.0;
+        const TILT: f32 = -0.12;
         let Clock { t, focus, .. } = self.0;
-        let (c, unit) = center(focus);
+        let (c, unit) = optical_center(focus);
         let pen = Pen::new(unit);
-        let (half_len, r) = ((focus.w * 0.32).min(unit * 0.62), unit * 0.085);
-        // Perspective shrinks the right end; re-centered.
-        let persp = |f: f32| 1.25 / (1.0 + 0.55 * f);
-        let shift = (1.25 - 1.25 / 1.55) / 2.0 * half_len;
-        let along =
-            |f: f32, off: f32| turn(c, -0.2, (f * 2.0 - 1.0) * half_len * persp(f) + shift, off);
+        let (half_len, r) = ((focus.w * 0.42).min(unit * 0.95), unit * 0.11);
+        let spin = t * 0.35;
+        // `f` runs 0..1 along the axis: screen point and depth (-1 far, 1 near).
         let point = |f: f32, phase: f32| {
-            let (z, y) = (f * TAU * 2.4 + t * 0.55 + phase).sin_cos();
-            let p = along(f, y * r * persp(f) * (1.0 + 0.1 * z));
-            (p, z)
+            let (z, y) = (f * TAU * TURNS + spin + phase).sin_cos();
+            (turn(c, TILT, (f * 2.0 - 1.0) * half_len, y * r), z)
         };
-        let taper = |f: f32| ramp(0.0, 0.18, f) * ramp(1.0, 0.82, f) * (1.1 - 0.35 * f);
-
-        // Dashed axis and ruler.
-        let axis: Vec<_> = (0..=48)
-            .map(|i| along(-0.08 + 1.16 * i as f32 / 48.0, 0.0))
-            .collect();
-        pen.dashed(out, &axis, 6.0, 5.0, HAIR, 45);
-        let ruler = |f: f32, d: f32| along(f, r * 1.8 * persp(f) + d);
-        pen.line(out, ruler(0.0, 0.0), ruler(1.0, 0.0), HAIR, 50);
-        for k in 0..=RUNGS {
-            let f = k as f32 / RUNGS as f32;
-            let tick = pen.px(if k % 5 == 0 { 9.0 } else { 4.0 });
-            pen.line(
-                out,
-                ruler(f, 0.0),
-                ruler(f, tick),
-                if k % 5 == 0 { MID } else { HAIR },
-                55,
-            );
-        }
-
-        let mut layers = Layers::new(pen);
+        let fade = |f: f32| ramp(0.0, 0.12, f) * ramp(1.0, 0.88, f);
+        let mut layers = Layers::new();
         for phase in [0.0, PI] {
-            for i in 0..SAMPLES - 1 {
-                let (f0, f1) = (i as f32 / SAMPLES as f32, (i + 1) as f32 / SAMPLES as f32);
-                let ((a, za), (b, zb)) = (point(f0, phase), point(f1, phase));
-                layers.depth_line(a, b, (za + zb) / 2.0, taper(f0), 25.0, 220.0);
+            for i in 0..=DOTS {
+                let f = i as f32 / DOTS as f32;
+                let (p, z) = point(f, phase);
+                let n = (z + 1.0) / 2.0;
+                layers.push(
+                    z,
+                    Shape::Circle {
+                        c: p,
+                        r: pen.px(1.1 + 2.3 * n * n),
+                        fill: true,
+                        level: (shade(z, 30.0, 240.0) as f32 * fade(f)) as u8,
+                    },
+                );
             }
         }
         for k in 0..RUNGS {
             let f = (k as f32 + 0.5) / RUNGS as f32;
             let ((a, za), (b, zb)) = (point(f, 0.0), point(f, PI));
-            for d in 1..6 {
-                let fd = d as f32 / 6.0;
+            for d in 1..8 {
+                let fd = d as f32 / 8.0;
                 let z = za + (zb - za) * fd;
                 layers.push(
-                    z - 0.01,
+                    z - 0.02, // under the strands
                     Shape::Circle {
                         c: lerp(a, b, fd),
-                        r: pen.px(0.9),
+                        r: pen.px(0.8),
                         fill: true,
-                        level: (shade(z, 25.0, 140.0) as f32 * taper(f)) as u8,
-                    },
-                );
-            }
-            for (p, z) in [(a, za), (b, zb)] {
-                let n = (z + 1.0) / 2.0;
-                layers.push(
-                    z + 0.01, // nodes over the strand
-                    Shape::Circle {
-                        c: p,
-                        r: pen.px(1.0 + 2.4 * n),
-                        fill: true,
-                        level: (shade(z, 40.0, 245.0) as f32 * taper(f)) as u8,
+                        level: (shade(z, 18.0, 120.0) as f32 * fade(f)) as u8,
                     },
                 );
             }
@@ -392,163 +266,86 @@ impl Helix {
 }
 
 impl Globe {
-    /// Wireframe globe with a rim-lit limb, a satellite on a dotted orbit and a guide arc.
+    /// Wireframe globe, centered: a 15 degree graticule whose far side shows faintly
+    /// through, a rim lit from the upper left, and a satellite on a dotted orbit.
     fn frame(&self, out: &mut Vec<Shape>) {
-        const SEG: usize = 64;
+        const SEG: usize = 96;
+        const ORBIT: f32 = 1.45; // in globe radii
         let Clock { t, focus, .. } = self.0;
-        let (c, unit) = anchor(focus);
+        let (c, unit) = optical_center(focus);
         let pen = Pen::new(unit);
-        let r = unit * 0.25;
-        let (spin, tilt) = (t * 0.22, 0.38 + 0.08 * (t * 0.3).sin());
+        let r = unit * 0.2; // as Moon; the orbit reaches 0.29 unit
+        let (spin, tilt) = (t * 0.12, 0.4 + 0.05 * (t * 0.13).sin());
         let view = |p: V3| p.rot_y(spin).rot_x(tilt);
-        let at = |k: usize| k as f32 / SEG as f32 * TAU;
-        const GUIDE: f32 = 1.55; // guide arc radius, in globe radii
-
-        // Guide arc with ticks.
-        let (g0, g1) = (PI * 0.7, PI * 1.9);
-        pen.dashed(
-            out,
-            &arc(c, r * GUIDE, r * GUIDE, 0.0, g0, g1, 120),
-            5.0,
-            6.0,
-            HAIR,
-            34,
-        );
-        for i in 0..=((g1 - g0) / (PI / 12.0)) as usize {
-            let a = g0 + i as f32 * PI / 12.0;
-            let len = if i % 3 == 0 { 0.07 } else { 0.03 };
-            let (p, q) = (r * GUIDE, r * (GUIDE + len));
-            pen.line(
-                out,
-                (c.0 + a.cos() * p, c.1 + a.sin() * p),
-                (c.0 + a.cos() * q, c.1 + a.sin() * q),
-                HAIR,
-                44,
-            );
-        }
-        // Pole axis.
-        let (n_pole, s_pole) = (
-            view(V3::new(0.0, -1.35, 0.0)),
-            view(V3::new(0.0, 1.35, 0.0)),
-        );
-        pen.dashed(
-            out,
-            &[n_pole.screen(c, r), s_pole.screen(c, r)],
-            7.0,
-            5.0,
-            HAIR,
-            85,
-        );
-
-        let mut layers = Layers::new(pen);
-        // kind: 0 grid, 1 equator, 2 accent meridian
-        let mut curve = |f: &dyn Fn(f32) -> V3, kind: u8| {
+        let mut layers = Layers::new();
+        // The equator and prime meridian are a little heavier.
+        let mut curve = |f: &dyn Fn(f32) -> V3, major: bool| {
             for k in 0..SEG {
-                let (p, q) = (view(f(at(k))), view(f(at(k + 1))));
+                let (a0, a1) = (
+                    k as f32 / SEG as f32 * TAU,
+                    (k + 1) as f32 / SEG as f32 * TAU,
+                );
+                let (p, q) = (view(f(a0)), view(f(a1)));
                 let z = (p.z + q.z) / 2.0;
-                let (a, b) = (p.screen(c, r), q.screen(c, r));
-                if z < 0.0 {
-                    if k % 2 == 0 {
-                        // The back is dotted.
-                        layers.push(
-                            z,
-                            Shape::Circle {
-                                c: lerp(a, b, 0.5),
-                                r: pen.px(0.7),
-                                fill: true,
-                                level: 34,
-                            },
-                        );
-                    }
-                    continue;
-                }
-                let (weight, far, near) = match kind {
-                    2 => (MID + 0.4, 150.0, 250.0),
-                    1 => (MID, 100.0, 195.0),
-                    _ => (HAIR + 0.35 * z, 45.0, 135.0),
+                let (weight, level) = match (z < 0.0, major) {
+                    (true, _) => (HAIR, 24), // the far side, faint
+                    (false, true) => (MID, shade(z, 90.0, 225.0)),
+                    (false, false) => (HAIR + 0.5 * z, shade(z, 55.0, 165.0)),
                 };
-                let level = shade(z, far, near);
                 layers.push(
-                    z + kind as f32 * 0.01,
+                    z,
                     Shape::Line {
-                        a,
-                        b,
+                        a: p.screen(c, r),
+                        b: q.screen(c, r),
                         width: pen.px(weight),
                         level,
                     },
                 );
             }
         };
-        for m in 0..6 {
-            let lon = m as f32 * PI / 6.0;
+        for m in 0..12 {
+            let lon = m as f32 * PI / 12.0;
             curve(
                 &|a| V3::new(a.cos() * lon.cos(), a.sin(), a.cos() * lon.sin()),
-                if m == 0 { 2 } else { 0 },
+                m == 0,
             );
         }
-        for lat in [-60f32, -30.0, 0.0, 30.0, 60.0] {
-            let (y, rr) = lat.to_radians().sin_cos();
-            curve(
-                &|a| V3::new(a.cos() * rr, y, a.sin() * rr),
-                u8::from(lat == 0.0),
-            );
+        for i in -5i32..=5 {
+            let (y, rr) = (i as f32 * PI / 12.0).sin_cos();
+            curve(&|a| V3::new(a.cos() * rr, y, a.sin() * rr), i == 0);
         }
-
-        // Satellite and trail, hidden behind the globe.
-        let orbit = |a: f32| {
-            V3::new(a.cos() * 1.5, 0.0, a.sin() * 1.5)
-                .rot_x(0.45)
-                .rot_z(0.3)
-        };
-        let hidden = |p: V3| p.z < 0.0 && (p.x * p.x + p.y * p.y) < 1.0;
-        let front: Vec<_> = (0..=96)
-            .map(|k| orbit(k as f32 / 96.0 * TAU))
-            .collect::<Vec<_>>()
-            .split(|p| hidden(*p))
-            .flat_map(|run| {
-                let pts: Vec<_> = run.iter().map(|p| p.screen(c, r)).collect();
-                let mut dots = Vec::new();
-                pen.dotted(&mut dots, &pts, 9.0, 0.75, 70);
-                dots
-            })
-            .collect();
-        for d in front {
-            layers.push(0.9, d);
-        }
-        let head = t * 0.5;
-        for i in 0..16 {
-            let (p, q) = (
-                orbit(head - i as f32 * 0.035),
-                orbit(head - (i + 1) as f32 * 0.035),
-            );
-            if hidden(p) || hidden(q) {
-                continue;
+        // Orbit and satellite, hidden behind the globe.
+        let orbit = |a: f32| view(V3::new(a.cos() * ORBIT, 0.0, a.sin() * ORBIT)).rot_z(0.3);
+        let hidden = |p: V3| p.z < 0.0 && p.x * p.x + p.y * p.y < 1.0;
+        const ORBIT_DOTS: usize = 140;
+        for k in 0..ORBIT_DOTS {
+            let p = orbit(k as f32 / ORBIT_DOTS as f32 * TAU - spin);
+            if !hidden(p) {
+                layers.push(
+                    p.z / ORBIT,
+                    Shape::Circle {
+                        c: p.screen(c, r),
+                        r: pen.px(0.7),
+                        fill: true,
+                        level: shade(p.z / ORBIT, 30.0, 95.0),
+                    },
+                );
             }
-            let fade = 1.0 - i as f32 / 16.0;
-            layers.push(
-                1.0,
-                Shape::Line {
-                    a: p.screen(c, r),
-                    b: q.screen(c, r),
-                    width: pen.px(HAIR + (MID - HAIR) * fade),
-                    level: (210.0 * fade) as u8,
-                },
-            );
         }
-        let s = orbit(head);
-        if !hidden(s) {
+        let sat = orbit(t * 0.3);
+        if !hidden(sat) {
             layers.push(
-                1.1,
+                sat.z / ORBIT + 0.01,
                 Shape::Circle {
-                    c: s.screen(c, r),
-                    r: pen.px(3.0),
+                    c: sat.screen(c, r),
+                    r: pen.px(2.2),
                     fill: true,
-                    level: 245,
+                    level: shade(sat.z / ORBIT, 120.0, 230.0),
                 },
             );
         }
         layers.flush(out);
-        pen.rim(out, c, r, LIGHT_2D, 1.0);
+        pen.rim(out, c, r, LIGHT_2D, 0.8);
     }
 }
 
@@ -593,125 +390,163 @@ impl DotWave {
 }
 
 impl Cubes {
-    /// 2x2x2 block of lit cubes making staggered quarter-turns about alternating axes.
+    /// A 2x2x2 block of cubes, seen three-quarters on and swaying gently, whose halves
+    /// take turns making quarter twists like a puzzle cube: ease in, turn, settle, hold. Each cube's faces are halftone dots that turn with them, shaded by light
+    /// and depth. Dots behind another cube aren't drawn, so the twisting half passes
+    /// cleanly in front of and behind the rest.
     fn frame(&self, out: &mut Vec<Shape>) {
-        const PERIOD: f32 = 4.0; // seconds per quarter-turn, including the hold
-        const MOVE: f32 = 0.55; // fraction of the period spent turning
-        const LAG: f32 = 0.07; // stagger per cube, fraction of the period
-                               // Faces: corner indices (bit 0 = x, 1 = y, 2 = z) and normals.
-        const FACES: [([usize; 4], (f32, f32, f32)); 6] = [
-            ([0, 2, 6, 4], (-1.0, 0.0, 0.0)),
-            ([1, 3, 7, 5], (1.0, 0.0, 0.0)),
-            ([0, 1, 5, 4], (0.0, -1.0, 0.0)),
-            ([2, 3, 7, 6], (0.0, 1.0, 0.0)),
-            ([0, 1, 3, 2], (0.0, 0.0, -1.0)),
-            ([4, 5, 7, 6], (0.0, 0.0, 1.0)),
-        ];
+        const CELLS: usize = 16; // halftone cells across one cube's face
+        const INSET: f32 = 0.07; // empty margin on each face, as a fraction of the cube
+        const PERIOD: f32 = 5.0; // seconds per twist, including the hold
+        const MOVE: f32 = 0.55; // fraction of the period spent twisting
         let light = V3::new(-0.45, -0.7, 0.55);
         let Clock { t, focus, .. } = self.0;
         let (c, unit) = optical_center(focus);
         let pen = Pen::new(unit);
-        let s = unit * 0.12;
-        let step = (t / PERIOD).floor();
-        let phase = t / PERIOD - step;
-        let axis = (step as i64).rem_euclid(3);
+        let s = unit * 0.13; // half the block's side
 
-        pen.halftone(out, (c.0 + s * 0.5, c.1 + s * 2.5), s * 2.1, s * 0.42, 34);
-        let mut layers = Layers::new(pen);
-        for cx in [-0.5f32, 0.5] {
-            for cy in [-0.5f32, 0.5] {
-                for cz in [-0.5f32, 0.5] {
-                    // MOVE + 3 * LAG < 1, so every cube finishes within the period.
-                    let lag = [cx, cy, cz].iter().filter(|&&v| v > 0.0).count() as f32;
-                    let progress = ((phase - lag * LAG) / MOVE).clamp(0.0, 1.0);
-                    let angle = ease(progress) * PI / 2.0;
-                    let gap = 1.08 + 0.3 * (PI * progress).sin();
-                    let rot = |p: V3| {
-                        let p = match axis {
-                            0 => p.rot_y(angle),
-                            1 => p.rot_x(angle),
-                            _ => p.rot_z(angle),
-                        };
-                        p.rot_y(0.62).rot_x(0.5)
-                    };
-                    let o = V3::new(cx * gap, cy * gap, cz * gap);
-                    let corners: Vec<V3> = (0..8)
-                        .map(|k| {
-                            let d = |bit: usize| if k >> bit & 1 == 1 { 0.5 } else { -0.5 };
-                            rot(V3::new(o.x + d(0), o.y + d(1), o.z + d(2)))
-                        })
-                        .collect();
-                    for (idx, nrm) in FACES {
-                        let n = rot(V3::new(nrm.0, nrm.1, nrm.2));
-                        if n.z <= 0.02 {
-                            continue; // facing away
-                        }
-                        let z = (idx.iter().map(|&i| corners[i].z).sum::<f32>() / 4.0 / 1.6)
-                            .clamp(-1.0, 1.0);
-                        let lambert = (n.x * light.x + n.y * light.y + n.z * light.z).max(0.0);
-                        let points: Vec<_> = idx.iter().map(|&i| corners[i].screen(c, s)).collect();
-                        for e in 0..4 {
-                            let (a, b) = (points[e], points[(e + 1) % 4]);
-                            let width = pen.px(HAIR + (MID - HAIR) * (z + 1.0) / 2.0);
-                            layers.push(
-                                z + 0.001,
-                                Shape::Line {
-                                    a,
-                                    b,
-                                    width,
-                                    level: shade(z, 110.0, 225.0),
-                                },
+        // This period's twist: axis, which half, direction and progress.
+        let step = (t / PERIOD).floor();
+        let progress = ((t / PERIOD - step) / MOVE).min(1.0);
+        let n = step as i64;
+        let axis = n.rem_euclid(3);
+        let side = if (n / 3).rem_euclid(2) == 0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let turn_dir = if n.rem_euclid(4) < 2 { 1.0 } else { -1.0 };
+        let angle = ease(progress) * PI / 2.0 * turn_dir;
+        let basis = [
+            V3::new(1.0, 0.0, 0.0),
+            V3::new(0.0, 1.0, 0.0),
+            V3::new(0.0, 0.0, 1.0),
+        ];
+        let twist = |p: V3| match axis {
+            0 => p.rot_x(angle),
+            1 => p.rot_y(angle),
+            _ => p.rot_z(angle),
+        };
+        // Three faces in view, as in a technical drawing, with a slow sway.
+        let tumble = |p: V3| {
+            p.rot_y(0.62 + 0.22 * (t * 0.1).sin())
+                .rot_x(0.5 + 0.08 * (t * 0.13).sin())
+        };
+
+        // Each cube in view space: center, its three unit axes, and which side of the cut
+        // it's on (its center's coordinate along the twist axis, +-0.5).
+        let cubes: Vec<(V3, [V3; 3], f32)> = (0..8)
+            .map(|k| {
+                let half = |bit: usize| if k >> bit & 1 == 1 { 0.5 } else { -0.5 };
+                let o = V3::new(half(0), half(1), half(2));
+                let along = [o.x, o.y, o.z][axis as usize];
+                if along * side > 0.0 {
+                    (tumble(twist(o)), basis.map(|e| tumble(twist(e))), along)
+                } else {
+                    (tumble(o), basis.map(tumble), along)
+                }
+            })
+            .collect();
+        let dot3 = |a: V3, b: V3| a.x * b.x + a.y * b.y + a.z * b.z;
+        // Whether cube `k` lies between point `p` and the viewer (toward +z).
+        let hides = |k: usize, p: V3| {
+            let (center, axes, _) = cubes[k];
+            let d = V3::new(p.x - center.x, p.y - center.y, p.z - center.z);
+            let (mut near, mut far) = (1e-3f32, f32::INFINITY);
+            for a in axes {
+                let (o, dir) = (dot3(d, a), a.z);
+                if dir.abs() < 1e-6 {
+                    if o.abs() > 0.5 {
+                        return false;
+                    }
+                    continue;
+                }
+                let (ta, tb) = ((-0.5 - o) / dir, (0.5 - o) / dir);
+                near = near.max(ta.min(tb));
+                far = far.min(ta.max(tb));
+                if near > far {
+                    return false;
+                }
+            }
+            true
+        };
+
+        pen.halftone(out, (c.0, c.1 + s * 2.6), s * 1.9, s * 0.4, 34);
+        let cell = (1.0 - 2.0 * INSET) / CELLS as f32;
+        for (k, &(center, axes, along)) in cubes.iter().enumerate() {
+            for i in 0..3 {
+                for sign in [1.0f32, -1.0] {
+                    let nrm = V3::new(axes[i].x * sign, axes[i].y * sign, axes[i].z * sign);
+                    if nrm.z <= 0.02 {
+                        continue; // facing away
+                    }
+                    let (u, w) = (axes[(i + 1) % 3], axes[(i + 2) % 3]);
+                    let mut tone = 0.15 + 0.85 * dot3(nrm, light).max(0.0);
+                    // Faces on the cut between the halves are inside the block: shadowed,
+                    // so mid-twist they read as a gap rather than as stray dots.
+                    if i == axis as usize && sign * along < 0.0 {
+                        tone *= 0.3;
+                    }
+                    for j in 0..CELLS {
+                        for m in 0..CELLS {
+                            let a = -0.5 + INSET + (m as f32 + 0.5) * cell;
+                            let b = -0.5 + INSET + (j as f32 + 0.5) * cell;
+                            let p = V3::new(
+                                center.x + nrm.x * 0.5 + u.x * a + w.x * b,
+                                center.y + nrm.y * 0.5 + u.y * a + w.y * b,
+                                center.z + nrm.z * 0.5 + u.z * a + w.z * b,
                             );
+                            if (0..cubes.len()).any(|o| o != k && hides(o, p)) {
+                                continue;
+                            }
+                            // Nearer points a little brighter: a gradient across faces.
+                            let depth = (p.z / 3f32.sqrt() + 1.0) / 2.0;
+                            let level = tone * (0.65 + 0.35 * depth);
+                            out.push(Shape::Circle {
+                                c: p.screen(c, s),
+                                r: s * cell * 0.5 * level.sqrt() * nrm.z.sqrt(),
+                                fill: true,
+                                level: (50.0 + 190.0 * level) as u8,
+                            });
                         }
-                        layers.push(
-                            z,
-                            Shape::Polygon {
-                                points,
-                                level: (14.0 + 115.0 * lambert) as u8,
-                            },
-                        );
                     }
                 }
             }
         }
-        layers.flush(out);
     }
 }
 
 impl Sunburst {
-    /// Radial waveform: hairline rays around an empty center.
+    /// Dotted rays around an empty center. Ray lengths follow three slow waves, so
+    /// neighbors move together; dots shrink and dim toward the tips.
     fn frame(&self, out: &mut Vec<Shape>) {
-        const RAYS: usize = 240;
+        const RAYS: usize = 120;
+        const STEP: f32 = 7.0; // between dots along a ray, at a 1000 px screen
         let Clock { t, focus, .. } = self.0;
         let (c, unit) = optical_center(focus);
         let pen = Pen::new(unit);
-        let (r_in, reach) = (unit * 0.12, unit * 0.13);
-        let spin = t * 0.04;
+        let (r_in, reach) = (unit * 0.11, unit * 0.17);
+        let step = pen.px(STEP);
+        let spin = t * 0.02;
         for k in 0..RAYS {
             let a = k as f32 / RAYS as f32 * TAU;
-            // Low lobes, finer harmonics and per-ray grain at unrelated speeds.
-            let grain = (hash3(k as u32, 3, 0) & 0xFFFF) as f32 / 65536.0;
-            let wave = 0.3 * (2.0 * a + t * 0.35).sin()
-                + 0.25 * (5.0 * a - t * 0.6).sin()
-                + 0.2 * (9.0 * a + t * 0.9).sin()
-                + 0.25 * (grain * TAU + t * 1.3).sin();
-            let len = (0.3 + 0.7 * (wave + 1.0) / 2.0).clamp(0.0, 1.0).powf(1.4);
+            let wave = 0.45 * (2.0 * a + t * 0.16).sin()
+                + 0.35 * (3.0 * a - t * 0.11).sin()
+                + 0.2 * (5.0 * a + t * 0.07).sin();
+            let len = 0.25 + 0.75 * ((wave + 1.0) / 2.0).clamp(0.0, 1.0);
             let (sa, ca) = (a + spin).sin_cos();
-            let (r0, r1) = (r_in, r_in + reach * len);
-            pen.line(
-                out,
-                (c.0 + ca * r0, c.1 + sa * r0),
-                (c.0 + ca * r1, c.1 + sa * r1),
-                HAIR + (MID - HAIR) * len * len,
-                (40.0 + 205.0 * len) as u8,
-            );
+            let dots = ((reach * len) / step) as usize;
+            for i in 0..=dots {
+                let f = i as f32 / dots.max(1) as f32; // 0 inside, 1 at the tip
+                let d = r_in + i as f32 * step;
+                pen.dot(
+                    out,
+                    (c.0 + ca * d, c.1 + sa * d),
+                    1.6 * (1.0 - 0.6 * f),
+                    ((60.0 + 180.0 * len) * (1.0 - 0.55 * f)) as u8,
+                );
+            }
         }
-        pen.path(
-            out,
-            &arc(c, r_in * 0.85, r_in * 0.85, 0.0, 0.0, TAU, 120),
-            HAIR,
-            70,
-        );
     }
 }
 
@@ -809,26 +644,5 @@ impl Moon {
         let lit = (1.0 - phase.cos()) / 2.0;
         let toward_sun = turn((0.0, 0.0), TILT, phase.sin().signum(), 0.0);
         pen.rim(out, c, r, toward_sun, 0.15 + 0.45 * lit);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dashed_terminates_and_is_bounded_on_long_paths() {
-        // Long and far from the origin: where f32 phase math used to stall.
-        let pts = arc((12_000.0, 9_000.0), 5_000.0, 5_000.0, 0.0, 0.0, TAU, 2_000);
-        let mut out = Vec::new();
-        Pen::new(2160.0).dashed(&mut out, &pts, 6.0, 5.0, HAIR, 40);
-        let length = TAU * 5_000.0;
-        let dash_period = (6.0 + 5.0) * 2.16;
-        assert!(!out.is_empty());
-        assert!(
-            out.len() < (length / dash_period) as usize + pts.len() + 10,
-            "{}",
-            out.len()
-        );
     }
 }

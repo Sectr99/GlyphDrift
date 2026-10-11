@@ -139,6 +139,17 @@ pub unsafe extern "C" fn gd_set_clock(live: *mut Live, text: *const u8, len: usi
         .map(|(t, d)| [t.to_string(), d.to_string()]);
 }
 
+/// A box to keep clear, center (`cx`, `cy`) and half-size (`hw`, `hh`) in px; a half-size
+/// of 0 clears it. Topographic drift flows around it without drawing a clock.
+///
+/// # Safety
+/// `live` must come from `gd_new`.
+#[no_mangle]
+pub unsafe extern "C" fn gd_set_keep_clear(live: *mut Live, cx: f32, cy: f32, hw: f32, hh: f32) {
+    let area = (hw > 0.0 && hh > 0.0).then_some(((cx, cy), (hw, hh)));
+    (*live).anim.set_keep_clear(area);
+}
+
 /// Render the current frame into the cell, shape and text buffers.
 ///
 /// # Safety

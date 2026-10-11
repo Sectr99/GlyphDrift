@@ -5,8 +5,8 @@ How the app works and why. For what it does and how to use it, see the [README](
 ## Goals
 
 - A live wallpaper that can run all day: low CPU, pauses itself, no surprises
-- One small portable exe: no installer, no admin rights, no network access
-- Boring, auditable code: few dependencies (`windows`, `serde`, `toml`, `toml_edit`), minimal `unsafe`, each block with a `// SAFETY:` note
+- One small portable exe (or app on macOS): no installer, no admin rights, no network access
+- Boring, auditable code: few dependencies (`windows`, `serde`, `toml`, `toml_edit`; on macOS the `objc2` framework bindings), minimal `unsafe`, each block with a `// SAFETY:` note
 
 ## Layout
 
@@ -23,14 +23,18 @@ src/
 ├── theme.rs          color themes and the readability veil
 ├── power/            fullscreen and battery-saver detection
 ├── autostart.rs      Start with Windows (per-user Run key)
-├── log.rs            %APPDATA%\Glyphdrift\glyphdrift.log
+├── log.rs            glyphdrift.log next to the config (both hosts)
 ├── grid.rs, shape.rs what animations draw into
-└── icon.rs           the icon shape, shared with build.rs
+├── icon.rs           the icon shape, shared with build.rs
+├── ui.rs             settings shared by both hosts: tweak ids, sliders, hints, grouped lists
+└── macos/            the macOS host (see below)
 build.rs              embeds the manifest, icon and version info (no rc.exe)
+macos/                Info.plist and bundle.sh for Glyphdrift.app
+examples/             macos_iconset: the app icon for bundle.sh
 site/                 glyphdrift.com, deployed by Cloudflare Pages
 ```
 
-The core (`anim`, `grid`, `config`, `theme`, `icon`, `shape`) is portable and unit-tested on any platform; Windows host code is `cfg`-gated.
+The core (`anim`, `grid`, `config`, `theme`, `icon`, `shape`, `ui`) is portable and unit-tested on any platform; Windows host code is `cfg(windows)`, macOS host code `cfg(target_os = "macos")`. The hosts share no platform code, so a change to one can't break the other's build, and both can be checked from one machine (see the README).
 
 ## Desktop embedding
 
@@ -109,7 +113,23 @@ A named mutex keeps one instance; a second launch opens the first one's settings
 - Runs as the user; the only registry write is the optional Run entry.
 - The exe isn't code-signed yet, so SmartScreen warns on first run; releases list SHA-256 checksums.
 
+## macOS host
+
+`src/macos/` mirrors the Windows modules: `mod.rs` (app state, frame timer, lifecycle), `desktop.rs`, `render.rs`, `menu.rs`, `settings.rs`, `power.rs`, `autostart.rs`. Everything runs on the main thread; AppKit callbacks reach the state through `with_app`, which skips re-entrant calls instead of panicking.
+
+- **Desktop:** a borderless window per screen at `kCGDesktopWindowLevel`, above the desktop picture and below Finder's icons, ignoring the mouse, on all Spaces and stationary in Mission Control. Each screen has its own animation instance, focused on that screen. Screens are rebuilt on `applicationDidChangeScreenParameters:`.
+- **Units:** points, not pixels; the font size is in points, so 16 px on Windows and 16 pt here look the same size.
+- **Frame loop:** an `NSTimer` in the common run loop modes, so it keeps firing while a menu is open or a slider is dragged (Windows needs its fallback `WM_TIMER` for this). Once a second: config hot reload and pause checks.
+- **Pausing:** per window via `occlusionState`, which covers fullscreen Spaces, windows over the whole desktop and the lock screen; Low Power Mode stands in for battery saver.
+- **Rendering:** Metal with 4x MSAA. Core Graphics came first, but CPU stroking cost 40-140 ms a frame for the contour animations at Retina sizes. Now everything is triangles in one vertex format: grid cells sample a glyph atlas (Core Text rasterizes each character once), lines and flattened curves are a quad per segment with overlapping joints, circles and polygons are fans (polygons must be convex), and text shapes are cached textures. Lines thinner than a pixel fade instead of thinning, like Direct2D coverage. The CPU side is under 1.5 ms a frame for every animation; the MSAA buffer is memoryless on Apple GPUs.
+- **Menu bar and settings:** an `NSStatusItem` whose menu is rebuilt in `menuNeedsUpdate:`; the settings window uses standard AppKit controls and saves slider values on mouse-up.
+- **Single instance:** `try_lock` on a lock file next to the config; a second launch posts a distributed notification that opens the first one's settings. Reopening the app from Finder does the same through `applicationShouldHandleReopen:`.
+- **Open at Login:** a per-user LaunchAgent pointing at this executable, compared exactly like the Windows Run entry.
+
+At 3456x2234 on an M1 Pro, `ps` shows about 5% of one core for Matrix rain and 13-20% of one core for the contour and fluid animations, most of it the shared animation math: 0.5-2% of the whole CPU, in line with Windows.
+
 ## Testing
 
 - Unit tests: config parsing, contours, noise, slider mapping, grouped lists, determinism and bounds for every animation (including a 4K run that once caught a never-ending loop).
-- Manual: Windows 10 and 11, multi-monitor, DPI, Explorer restart, fullscreen apps, battery saver.
+- macOS: `cargo test --release snapshots -- --ignored --nocapture` draws every animation through the Metal renderer offscreen, times the CPU side and writes PNGs to `target/snapshots`.
+- Manual: Windows 10 and 11, multi-monitor, DPI, Explorer restart, fullscreen apps, battery saver. macOS so far: macOS 26 on Apple silicon, one Retina screen.

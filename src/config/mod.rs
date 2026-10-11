@@ -73,10 +73,16 @@ impl Default for General {
     }
 }
 
+/// A monospaced font every install has.
+#[cfg(not(target_os = "macos"))]
+pub const DEFAULT_FONT: &str = "Consolas";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_FONT: &str = "Menlo";
+
 impl Default for Font {
     fn default() -> Self {
         Self {
-            family: "Consolas".into(),
+            family: DEFAULT_FONT.into(),
             size: 16,
         }
     }
@@ -211,7 +217,7 @@ pub fn set_value(
 
 /// Save one setting, creating the file if needed; an unparseable file is left alone.
 pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Result<(), String> {
-    let path = default_path().ok_or("APPDATA not set")?;
+    let path = default_path().ok_or("no settings folder")?;
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let out = set_value(&text, section, key, value)?;
     if let Some(dir) = path.parent() {
@@ -242,14 +248,21 @@ pub fn create_if_missing() -> bool {
     std::fs::write(&path, NEW_CONFIG).is_ok()
 }
 
-/// `%APPDATA%\Glyphdrift\config.toml`
+/// `%APPDATA%\Glyphdrift\config.toml`, or on macOS
+/// `~/Library/Application Support/Glyphdrift/config.toml`
 pub fn default_path() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("APPDATA")?;
-    Some(
-        std::path::PathBuf::from(base)
-            .join("Glyphdrift")
-            .join("config.toml"),
-    )
+    Some(settings_dir()?.join("Glyphdrift").join("config.toml"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn settings_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("APPDATA").map(Into::into)
+}
+
+#[cfg(target_os = "macos")]
+fn settings_dir() -> Option<std::path::PathBuf> {
+    let home = std::path::PathBuf::from(std::env::var_os("HOME")?);
+    Some(home.join("Library").join("Application Support"))
 }
 
 /// Older settings folder names, newest first.
@@ -257,10 +270,9 @@ const LEGACY_DIRS: [&str; 2] = ["WallMotion", "ascii-wallpaper"];
 
 /// Move an older settings folder into place, if there is no current one.
 pub fn migrate() {
-    let Some(base) = std::env::var_os("APPDATA") else {
+    let Some(base) = settings_dir() else {
         return;
     };
-    let base = std::path::PathBuf::from(base);
     let new = base.join("Glyphdrift");
     if new.exists() {
         return;

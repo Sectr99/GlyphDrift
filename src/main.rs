@@ -10,6 +10,19 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--screenshots") {
+        // Website images, drawn offscreen; the running wallpaper is left alone.
+        let result = match args.get(2) {
+            Some(dir) => glyphdrift::macos::screenshots(dir.as_ref()),
+            None => Err("usage: glyphdrift --screenshots <dir>".into()),
+        };
+        if let Err(e) = result {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(e) = glyphdrift::macos::run() {
         glyphdrift::macos::fatal(&e);
     }

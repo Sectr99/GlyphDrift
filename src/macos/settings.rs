@@ -8,15 +8,16 @@ use objc2::rc::Retained;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::{sel, AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSBitmapImageRep, NSButton, NSColor, NSControl,
-    NSDeviceRGBColorSpace, NSEventType, NSImage, NSMenuItem, NSPopUpButton, NSScreen, NSSlider,
-    NSTextAlignment, NSTextField, NSView, NSWindow, NSWindowStyleMask,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSApplication,
+    NSBackingStoreType, NSBitmapImageRep, NSButton, NSColor, NSControl, NSDeviceRGBColorSpace,
+    NSEventType, NSImage, NSMenuItem, NSPopUpButton, NSScreen, NSSlider, NSTextAlignment,
+    NSTextField, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{ns_string, NSPoint, NSRect, NSSize, NSString};
 
-use super::{with_app, App, Controller};
+use super::{tweak_value, with_app, App, Controller};
 use crate::anim::{self, ANIMATIONS};
-use crate::config::Rgb;
+use crate::config::{Config, Rgb};
 use crate::theme::{self, THEMES};
 use crate::ui::{self, Row, FRAME_RATES, SLIDERS};
 
@@ -81,24 +82,29 @@ pub fn closed() {
 /// Show the current settings, if open.
 pub fn refresh(app: &App) {
     SETTINGS.with(|s| {
-        let Ok(s) = s.try_borrow() else {
-            return;
-        };
-        let Some(s) = s.as_ref() else {
-            return;
-        };
-        let anim = anim::index_of(&app.cfg.general.animation);
+        if let Ok(s) = s.try_borrow() {
+            if let Some(s) = s.as_ref() {
+                show(s, &app.cfg);
+            }
+        }
+    });
+}
+
+/// Set the controls to `cfg`.
+fn show(s: &Settings, cfg: &Config) {
+    {
+        let anim = anim::index_of(&cfg.general.animation);
         s.animation.selectItemWithTag(anim as isize);
         s.theme
-            .selectItemWithTag(theme::index_of(&app.cfg.theme.name) as isize);
+            .selectItemWithTag(theme::index_of(&cfg.theme.name) as isize);
         for (id, slider, value, _) in &s.sliders {
-            let v = app.tweak_value(*id);
+            let v = tweak_value(cfg, *id);
             slider.setIntegerValue(ui::slider_pos(v) as isize);
             value.setStringValue(&NSString::from_str(&ui::value_label(*id, v)));
         }
         s.fps
-            .selectItemAtIndex(ui::frame_rate_index(app.tweak_value(ui::FPS)) as isize);
-        s.clock.setState(isize::from(app.cfg.general.clock));
+            .selectItemAtIndex(ui::frame_rate_index(tweak_value(cfg, ui::FPS)) as isize);
+        s.clock.setState(isize::from(cfg.general.clock));
         // Grey out the controls that do nothing for this animation.
         let (object_scale, clock) = ui::applies(anim);
         for (id, slider, value, label) in &s.sliders {
@@ -114,9 +120,34 @@ pub fn refresh(app: &App) {
             }
         }
         s.clock.setEnabled(clock);
-        s.menu_bar
-            .setState(isize::from(app.cfg.general.match_menu_bar));
-    });
+        s.menu_bar.setState(isize::from(cfg.general.match_menu_bar));
+    }
+}
+
+/// The window showing `cfg`, drawn to a bitmap without ever going on screen (screenshots).
+pub fn render_offscreen(
+    mtm: MainThreadMarker,
+    target: &Controller,
+    cfg: &Config,
+) -> Option<Retained<NSBitmapImageRep>> {
+    let s = build(mtm, target);
+    // Dark, like the wallpaper behind it, whatever this Mac uses.
+    // SAFETY: AppKit's constant name.
+    let dark = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua });
+    s.window.setAppearance(dark.as_deref());
+    show(&s, cfg);
+    // The content view's superview is the frame view: title bar and controls.
+    // SAFETY: read on the main thread while the window is alive.
+    let view = unsafe { s.window.contentView()?.superview() }?;
+    view.layoutSubtreeIfNeeded();
+    let bounds = view.bounds();
+    let rep = view.bitmapImageRepForCachingDisplayInRect(bounds)?;
+    // The first pass draws disabled sliders with their knob at the far left; the second
+    // draws them right.
+    view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+    let rep = view.bitmapImageRepForCachingDisplayInRect(bounds)?;
+    view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+    Some(rep)
 }
 
 /// A slider moved: apply live, save once released.

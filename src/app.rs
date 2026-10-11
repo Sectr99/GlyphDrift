@@ -112,14 +112,17 @@ struct App {
     /// Config file mtime at last load; a change triggers a reload.
     config_mtime: Option<SystemTime>,
     user_paused: bool,
-    auto_paused: bool,
+    /// Why the wallpaper paused itself, if it did.
+    auto_paused: Option<&'static str>,
+    /// The tray window, for status updates; invalid until it exists.
+    tray: HWND,
     /// Time and date last shown, when the clock is on.
     clock: Option<[String; 2]>,
 }
 
 impl App {
     fn paused(&self) -> bool {
-        self.user_paused || self.auto_paused
+        self.user_paused || self.auto_paused.is_some()
     }
 
     /// True while a modal loop owns the thread (see `FALLBACK_TIMER_ID`).
@@ -320,9 +323,29 @@ impl App {
         self.last_power_check = Instant::now();
         let before = self.paused();
         let g = &self.cfg.general;
-        self.auto_paused = (g.pause_on_fullscreen && power::fullscreen_app_active())
-            || (g.pause_on_battery_saver && power::battery_saver_on());
+        self.auto_paused = if g.pause_on_fullscreen && power::fullscreen_app_active() {
+            Some("a fullscreen app is open")
+        } else if g.pause_on_battery_saver && power::battery_saver_on() {
+            Some("battery saver is on")
+        } else {
+            None
+        };
+        self.update_tray();
         self.paused() != before
+    }
+
+    /// Show the current animation and theme, or why it's paused, on the tray icon.
+    fn update_tray(&self) {
+        let tip = if self.user_paused {
+            "WallMotion: paused".to_string()
+        } else if let Some(reason) = self.auto_paused {
+            format!("WallMotion: paused while {reason}")
+        } else {
+            let anim = anim::ANIMATIONS[anim::index_of(&self.cfg.general.animation)].1;
+            let theme = THEMES[theme::index_of(&self.cfg.theme.name)].label;
+            format!("WallMotion: {anim} · {theme}")
+        };
+        tray::set_status(self.tray, &tip, self.paused(), self.user_paused);
     }
 }
 
@@ -451,6 +474,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         tray::WM_TOGGLE_PAUSE => {
             if let Some(app) = app_of(hwnd) {
                 app.user_paused = !app.user_paused;
+                app.update_tray();
                 app.last_frame = Instant::now();
                 app.timer.set(app.interval_ms());
             }
@@ -552,7 +576,8 @@ pub fn run() -> Result<()> {
             last_pump: now,
             config_mtime: config::modified(),
             user_paused: false,
-            auto_paused: false,
+            auto_paused: None,
+            tray: HWND::default(),
             clock: None,
         }));
 
@@ -589,6 +614,8 @@ pub fn run() -> Result<()> {
             desktop::place(hwnd, parent);
 
             let tray = tray::create(hwnd)?;
+            (*app_ptr).tray = tray;
+            (*app_ptr).update_tray();
             (*app_ptr).timer.window = hwnd;
             (*app_ptr).timer.set((*app_ptr).interval_ms());
 

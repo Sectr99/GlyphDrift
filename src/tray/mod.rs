@@ -1,16 +1,19 @@
 //! Notification-area icon. Left-click opens the settings window; the right-click menu keeps
 //! the quick actions: Settings, Animation, Show clock, Start with Windows, Pause and Quit.
+//! While the wallpaper is paused the icon turns grey and its hover text says why.
 //!
 //! Uses its own hidden top-level window: the wallpaper window is a child of WorkerW and
 //! cannot reliably take foreground focus, which popup menus require.
 
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
@@ -78,16 +81,24 @@ unsafe fn radio_submenu<'a>(
     Some(sub)
 }
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
-/// The tray HICON, created in `create` and destroyed in `destroy`; 0 = stock icon.
+/// The tray HICONs (normal and paused), created in `create` and destroyed in `destroy`;
+/// 0 = stock icon.
 static ICON: AtomicIsize = AtomicIsize::new(0);
+static ICON_PAUSED: AtomicIsize = AtomicIsize::new(0);
+/// Hover text and paused state, kept so the icon can be re-added after Explorer restarts.
+static TIP: Mutex<String> = Mutex::new(String::new());
+static PAUSED: AtomicBool = AtomicBool::new(false);
+/// Paused from the menu (the item then reads Resume) rather than automatically.
+static USER_PAUSED: AtomicBool = AtomicBool::new(false);
 
-/// White, like the stock notification-area icons.
+/// White, like the stock notification-area icons; grey while paused.
 const ICON_RGB: (u8, u8, u8) = (0xff, 0xff, 0xff);
+const ICON_PAUSED_RGB: (u8, u8, u8) = (0x80, 0x80, 0x80);
 
 /// Rasterize the icon at the small-icon size (DPI-scaled) into a 32-bit alpha HICON.
-unsafe fn make_icon() -> HICON {
+unsafe fn make_icon(rgb: (u8, u8, u8)) -> HICON {
     let n = GetSystemMetrics(SM_CXSMICON).clamp(16, 256) as usize;
-    let bgra = crate::icon::bgra(n, ICON_RGB);
+    let bgra = crate::icon::bgra(n, rgb);
     // 1-bpp AND mask, rows padded to 16 bits; all zero so the alpha channel decides.
     let mask = vec![0u8; n.div_ceil(16) * 2 * n];
     // SAFETY: `bgra` holds n*n 32-bit pixels and `mask` n rows of WORD-aligned 1-bpp bits,
@@ -137,7 +148,8 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
             hinst,
             Some(wallpaper.0 as *const _),
         )?;
-        ICON.store(make_icon().0 as isize, Ordering::Relaxed);
+        ICON.store(make_icon(ICON_RGB).0 as isize, Ordering::Relaxed);
+        ICON_PAUSED.store(make_icon(ICON_PAUSED_RGB).0 as isize, Ordering::Relaxed);
         add_icon(hwnd);
         Ok(hwnd)
     }
@@ -148,9 +160,11 @@ pub fn destroy(tray: HWND) {
     unsafe {
         remove_icon(tray);
         let _ = DestroyWindow(tray);
-        let icon = ICON.swap(0, Ordering::Relaxed);
-        if icon != 0 {
-            let _ = DestroyIcon(HICON(icon as *mut _));
+        for slot in [&ICON, &ICON_PAUSED] {
+            let icon = slot.swap(0, Ordering::Relaxed);
+            if icon != 0 {
+                let _ = DestroyIcon(HICON(icon as *mut _));
+            }
         }
     }
 }
@@ -162,16 +176,51 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
         uID: 1,
         uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
         uCallbackMessage: WM_TRAY,
-        hIcon: match ICON.load(Ordering::Relaxed) {
+        hIcon: match (if PAUSED.load(Ordering::Relaxed) {
+            &ICON_PAUSED
+        } else {
+            &ICON
+        })
+        .load(Ordering::Relaxed)
+        {
             0 => LoadIconW(None, IDI_APPLICATION).unwrap_or_default(),
             icon => HICON(icon as *mut _),
         },
         ..Default::default()
     };
-    for (dst, src) in nid.szTip.iter_mut().zip("WallMotion".encode_utf16()) {
+    let tip = TIP.lock().map(|t| t.clone()).unwrap_or_default();
+    let tip = if tip.is_empty() {
+        "WallMotion".into()
+    } else {
+        tip
+    };
+    // Leave the last slot as the terminating NUL.
+    let room = nid.szTip.len() - 1;
+    for (dst, src) in nid.szTip[..room].iter_mut().zip(tip.encode_utf16()) {
         *dst = src;
     }
     nid
+}
+
+/// Update the icon's hover text and paused look (grey icon; the menu offers Resume when
+/// `user_paused`). Does nothing if neither changed.
+pub fn set_status(tray: HWND, tip: &str, paused: bool, user_paused: bool) {
+    USER_PAUSED.store(user_paused, Ordering::Relaxed);
+    let Ok(mut current) = TIP.lock() else {
+        return;
+    };
+    if *current == tip && PAUSED.load(Ordering::Relaxed) == paused {
+        return;
+    }
+    *current = tip.into();
+    drop(current);
+    PAUSED.store(paused, Ordering::Relaxed);
+    if !tray.is_invalid() {
+        // SAFETY: `tray` is the window from `create`; the struct outlives the call.
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &icon_data(tray));
+        }
+    }
 }
 
 unsafe fn add_icon(hwnd: HWND) {
@@ -229,7 +278,12 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     MF_STRING
                 };
                 let _ = AppendMenuW(menu, flags, ID_AUTOSTART, w!("Start with Windows"));
-                let _ = AppendMenuW(menu, MF_STRING, ID_PAUSE, w!("Pause / Resume"));
+                let pause = if USER_PAUSED.load(Ordering::Relaxed) {
+                    w!("Resume")
+                } else {
+                    w!("Pause")
+                };
+                let _ = AppendMenuW(menu, MF_STRING, ID_PAUSE, pause);
                 let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit"));
                 let mut pt = Default::default();
                 let _ = GetCursorPos(&mut pt);

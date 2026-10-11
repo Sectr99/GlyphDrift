@@ -14,10 +14,10 @@ Run `wallmotion.exe`. Left-click its tray icon (or run it again) to open **Setti
 
 - **Animation**, grouped (ASCII, Graphics, Loops, Fluid, Contour)
 - **Theme**, with swatches of each theme's colors
-- Sliders for **speed**, **frame rate**, **glass** (a frosted veil so icon labels stay readable), **overall scale** and **object scale**
+- Sliders for **speed**, **icon readability** (fades the animation so icon labels stay legible), **overall scale** and **object scale**, plus a **frame rate** choice (Auto, 15 to 60 fps)
 - **Show clock**: time and date (your regional format) in a framed box at the center of Topographic drift; the contour lines flow around it
 
-Controls that don't apply to the current animation are greyed out. Right-click the tray icon for quick actions:
+Hover over any setting for a short explanation. Controls that don't apply to the current animation are greyed out. Right-click the tray icon for quick actions:
 
 | Menu | What it does |
 |---|---|
@@ -25,7 +25,7 @@ Controls that don't apply to the current animation are greyed out. Right-click t
 | Animation | Switch animation |
 | Show clock | Toggle the Topographic drift clock |
 | Start with Windows | Run at sign-in (also listed in Settings > Apps > Startup) |
-| Pause / Resume | Stop or restart the animation |
+| Pause / Resume | Stop or restart the animation. While paused (by you, a fullscreen app or battery saver) the icon turns grey and its hover text says why |
 | Quit | Exit and restore the normal wallpaper |
 
 Changes apply immediately and are remembered.

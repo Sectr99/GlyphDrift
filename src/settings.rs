@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
-use windows::core::{w, HSTRING, PCWSTR};
+use windows::core::{w, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     BOOL, COLORREF, ERROR_SUCCESS, HWND, LPARAM, LRESULT, RECT, WPARAM,
 };
@@ -21,7 +21,8 @@ use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_R
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, DRAWITEMSTRUCT, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
     MEASUREITEMSTRUCT, ODS_COMBOBOXEDIT, ODS_SELECTED, TBM_SETPOS, TBM_SETRANGE, TB_ENDTRACK,
-    TRACKBAR_CLASSW,
+    TOOLTIPS_CLASSW, TRACKBAR_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTM_SETMAXTIPWIDTH,
+    TTS_ALWAYSTIP, TTTOOLINFOW,
 };
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
@@ -30,13 +31,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetDlgCtrlID, GetDlgItem, IsWindow, LoadIconW, PostMessageW, RegisterClassW, SendMessageW,
     SetForegroundWindow, SetWindowTextW, ShowWindow, SystemParametersInfoW, BM_GETCHECK,
     BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
-    CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, HMENU, LBS_NOTIFY,
+    CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT, HMENU, LBS_NOTIFY,
     LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, NONCLIENTMETRICSW,
     SPI_GETNONCLIENTMETRICS, SPI_GETWORKAREA, SW_RESTORE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORLISTBOX,
     WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_HSCROLL, WM_MEASUREITEM,
-    WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_TOPMOST,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::anim::ANIMATIONS;
@@ -59,19 +60,62 @@ pub const OBJECT_SCALE: usize = 4;
 pub const CLOCK: usize = 5;
 
 /// (tweak id, label, slider min, slider max, default value)
-const SLIDERS: [(usize, &str, i32, i32, f32); 5] = [
+const SLIDERS: [(usize, &str, i32, i32, f32); 4] = [
     (SPEED, "Speed", 10, 400, 1.0),
-    (FPS, "Frame rate", 9, 60, 0.0), // position 9 means Auto
-    (GLASS, "Glass", 0, 90, 0.0),
+    (GLASS, "Icon readability", 0, 90, 0.0),
     (SCALE, "Overall scale", 50, 200, 1.0),
     (OBJECT_SCALE, "Object scale", 50, 200, 1.0),
 ];
+
+/// Frame-rate choices: (fps, label); 0 = each animation's own rate.
+const FRAME_RATES: [(f32, &str); 5] = [
+    (0.0, "Auto (recommended)"),
+    (15.0, "15 fps (lightest)"),
+    (24.0, "24 fps"),
+    (30.0, "30 fps"),
+    (60.0, "60 fps (smoothest)"),
+];
+
+/// Hover help for each setting, shown on its label and its control.
+fn hint(id: usize) -> &'static str {
+    match id {
+        SPEED => "How fast the animation moves.",
+        GLASS => {
+            "Fades the animation toward the background color so desktop icon labels stay \
+             easy to read."
+        }
+        SCALE => "Size of everything: ASCII characters, line weights and terrain features.",
+        OBJECT_SCALE => {
+            "Size of the centered shape in the Loops animations, on top of the overall scale."
+        }
+        FPS => {
+            "Auto uses each animation's own rate (24 or 30 fps). Higher is smoother but uses \
+             more CPU."
+        }
+        CLOCK => {
+            "Time and date at the center of Topographic drift; the contour lines flow \
+             around it."
+        }
+        _ => "",
+    }
+}
+
+/// Index into `FRAME_RATES` of the choice nearest `fps` (a hand-edited config may hold any).
+fn frame_rate_index(fps: f32) -> usize {
+    (0..FRAME_RATES.len())
+        .min_by(|&a, &b| {
+            let d = |i: usize| (FRAME_RATES[i].0 - fps).abs();
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap_or(0)
+}
 
 const ID_ANIMATION: usize = 100;
 const ID_THEME: usize = 101;
 const ID_RESET: usize = 102;
 const ID_CLOCK: usize = 103;
 const ID_CLOCK_LABEL: usize = 104;
+const ID_FPS: usize = 105;
 const SS_NOTIFY: u32 = 0x100;
 const ID_CLOSE: usize = 2; // IDCANCEL, so Esc closes the window
 const ID_SLIDER: usize = 200; // + tweak id
@@ -143,27 +187,18 @@ fn brush(slot: &AtomicIsize) -> HBRUSH {
     HBRUSH(slot.load(Ordering::Relaxed) as *mut _)
 }
 
-fn slider_pos(id: usize, value: f32) -> i32 {
-    match id {
-        FPS if value < 1.0 => 9,
-        FPS => value.round() as i32,
-        _ => (value * 100.0).round() as i32,
-    }
+/// Sliders work in hundredths (speed 1.00 = 100, 50% = 50).
+fn slider_pos(value: f32) -> i32 {
+    (value * 100.0).round() as i32
 }
 
-fn slider_value(id: usize, pos: i32) -> f32 {
-    match id {
-        FPS if pos <= 9 => 0.0,
-        FPS => pos as f32,
-        _ => pos as f32 / 100.0,
-    }
+fn slider_value(pos: i32) -> f32 {
+    pos as f32 / 100.0
 }
 
 fn value_label(id: usize, value: f32) -> String {
     match id {
         SPEED => format!("{value:.2}×"),
-        FPS if value < 1.0 => "Auto".into(),
-        FPS => format!("{value:.0} fps"),
         _ => format!("{:.0}%", value * 100.0),
     }
 }
@@ -325,6 +360,7 @@ fn client_height() -> i32 {
         + 4
         + 14
         + SLIDERS.len() as i32 * 36
+        + 36
         + 28
         + 8
         + 28
@@ -458,7 +494,7 @@ unsafe fn build(hwnd: HWND) {
         control(
             w!("STATIC"),
             label,
-            WINDOW_STYLE(0),
+            WINDOW_STYLE(SS_NOTIFY),
             (M, y + 6, 130, LABEL_H),
             ID_LABEL + id,
         );
@@ -484,6 +520,29 @@ unsafe fn build(hwnd: HWND) {
         ); // SS_RIGHT
         y += 36;
     }
+    control(
+        w!("STATIC"),
+        "Frame rate",
+        WINDOW_STYLE(SS_NOTIFY),
+        (M, y + 6, 130, LABEL_H),
+        ID_LABEL + FPS,
+    );
+    let rates = control(
+        w!("COMBOBOX"),
+        "",
+        WINDOW_STYLE(CBS_DROPDOWNLIST as u32) | WS_TABSTOP | WS_VSCROLL,
+        (M + 130, y + 2, 200, 200),
+        ID_FPS,
+    );
+    for (_, label) in FRAME_RATES {
+        SendMessageW(
+            rates,
+            CB_ADDSTRING,
+            WPARAM(0),
+            LPARAM(HSTRING::from(label).as_ptr() as isize),
+        );
+    }
+    y += 36;
     // The checkbox is only as wide as its box (its text stays, for screen readers) and a
     // clickable label sits beside it: themed checkboxes ignore the dark text color.
     control(
@@ -515,7 +574,73 @@ unsafe fn build(hwnd: HWND) {
         (CLIENT_W - M - 100, y, 100, 28),
         ID_CLOSE,
     );
+    add_tooltips(hwnd, s, dark);
     load(hwnd);
+}
+
+/// Hover help (see `hint`) on each setting's label and control. Labels carry it too, so it
+/// still shows when the control itself is greyed out.
+unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
+    let Ok(tip) = CreateWindowExW(
+        WS_EX_TOPMOST,
+        TOOLTIPS_CLASSW,
+        None,
+        WS_POPUP | WINDOW_STYLE(TTS_ALWAYSTIP),
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        hwnd,
+        None,
+        None,
+        None,
+    ) else {
+        return;
+    };
+    if dark {
+        let _ = SetWindowTheme(tip, w!("DarkMode_Explorer"), PCWSTR::null());
+    }
+    SendMessageW(
+        tip,
+        TTM_SETMAXTIPWIDTH,
+        WPARAM(0),
+        LPARAM(px(320, s) as isize),
+    );
+    let mut tools: Vec<(usize, usize)> = Vec::new(); // (control id, setting id)
+    for (id, ..) in SLIDERS {
+        tools.extend([
+            (ID_LABEL + id, id),
+            (ID_SLIDER + id, id),
+            (ID_VALUE + id, id),
+        ]);
+    }
+    tools.extend([
+        (ID_LABEL + FPS, FPS),
+        (ID_FPS, FPS),
+        (ID_CLOCK, CLOCK),
+        (ID_CLOCK_LABEL, CLOCK),
+    ]);
+    for (control, setting) in tools {
+        let Ok(child) = GetDlgItem(hwnd, control as i32) else {
+            continue;
+        };
+        // The tooltip copies the text when the tool is added.
+        let mut text: Vec<u16> = hint(setting).encode_utf16().chain(Some(0)).collect();
+        let info = TTTOOLINFOW {
+            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+            uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+            hwnd,
+            uId: child.0 as usize,
+            lpszText: PWSTR(text.as_mut_ptr()),
+            ..Default::default()
+        };
+        SendMessageW(
+            tip,
+            TTM_ADDTOOLW,
+            WPARAM(0),
+            LPARAM(&info as *const TTTOOLINFOW as isize),
+        );
+    }
 }
 
 /// Reflect the wallpaper's current settings in the controls.
@@ -540,6 +665,12 @@ unsafe fn load(hwnd: HWND) {
     for (id, ..) in SLIDERS {
         show(hwnd, id, get_tweak(id));
     }
+    SendMessageW(
+        GetDlgItem(hwnd, ID_FPS as i32).unwrap_or_default(),
+        CB_SETCURSEL,
+        WPARAM(frame_rate_index(get_tweak(FPS))),
+        LPARAM(0),
+    );
     let clock = get_tweak(CLOCK) != 0.0;
     SendMessageW(
         GetDlgItem(hwnd, ID_CLOCK as i32).unwrap_or_default(),
@@ -594,7 +725,7 @@ unsafe fn show(hwnd: HWND, id: usize, value: f32) {
             slider,
             TBM_SETPOS,
             WPARAM(1),
-            LPARAM(slider_pos(id, value) as isize),
+            LPARAM(slider_pos(value) as isize),
         );
     }
     if let Ok(label) = GetDlgItem(hwnd, (ID_VALUE + id) as i32) {
@@ -815,6 +946,12 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                         }
                     }
                 }
+                ID_FPS if code == CBN_SELCHANGE => {
+                    let sel = SendMessageW(source, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+                    if let Some(&(fps, _)) = FRAME_RATES.get(sel as usize) {
+                        tweak(FPS, fps, true);
+                    }
+                }
                 ID_THEME if code == LBN_SELCHANGE => {
                     let sel = SendMessageW(source, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
                     if sel >= 0 {
@@ -833,6 +970,13 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                     tweak(CLOCK, f32::from(u8::from(on)), true);
                 }
                 ID_RESET => {
+                    SendMessageW(
+                        GetDlgItem(hwnd, ID_FPS as i32).unwrap_or_default(),
+                        CB_SETCURSEL,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
+                    tweak(FPS, 0.0, true);
                     for (sid, _, _, _, default) in SLIDERS {
                         if let Ok(slider) = GetDlgItem(hwnd, (ID_SLIDER + sid) as i32) {
                             // A greyed-out slider's value is invisible; leave it alone.
@@ -854,9 +998,9 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
         WM_HSCROLL => {
             let slider = HWND(lp.0 as *mut _);
             let id = (GetDlgCtrlID(slider) as usize).wrapping_sub(ID_SLIDER);
-            if id < SLIDERS.len() {
+            if SLIDERS.iter().any(|s| s.0 == id) {
                 let pos = SendMessageW(slider, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
-                let value = slider_value(id, pos);
+                let value = slider_value(pos);
                 if let Ok(label) = GetDlgItem(hwnd, (ID_VALUE + id) as i32) {
                     let _ = SetWindowTextW(label, &HSTRING::from(value_label(id, value)));
                 }
@@ -887,18 +1031,20 @@ mod tests {
     fn slider_positions_round_trip() {
         for (id, _, min, max, default) in SLIDERS {
             assert!(
-                (min..=max).contains(&slider_pos(id, default)),
+                (min..=max).contains(&slider_pos(default)),
                 "default out of range for {id}"
             );
             for pos in min..=max {
                 assert_eq!(
-                    slider_pos(id, slider_value(id, pos)),
+                    slider_pos(slider_value(pos)),
                     pos,
                     "slider {id} position {pos}"
                 );
             }
         }
-        assert_eq!(value_label(FPS, 0.0), "Auto");
+        assert_eq!(FRAME_RATES[frame_rate_index(0.0)].0, 0.0);
+        assert_eq!(FRAME_RATES[frame_rate_index(45.0)].0, 30.0); // ties go to the lower
+        assert_eq!(FRAME_RATES[frame_rate_index(100.0)].0, 60.0);
     }
 
     #[test]

@@ -28,4 +28,4 @@ size = 16                     # pixel height
 # neon: synthwave-84 | claude
 name = "matrix"
 ramp = " .:-=+*#%@"           # dark -> bright, used by plasma and fire
-glass = 0.0                   # frosted veil over the animation, 0.0..=0.9 (higher = calmer)
+glass = 0.0                   # "Icon readability": fades the animation toward the background, 0.0..=0.9

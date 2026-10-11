@@ -34,10 +34,13 @@
       <li>The app makes no network connections. It has no telemetry, analytics, crash reporting,
         accounts or update checks.</li>
       <li>Your settings and a small diagnostic log are stored only on your computer, in
-        <code>%APPDATA%\Glyphdrift</code>. They never leave your PC. Deleting that folder removes
-        them.</li>
+        <code>%APPDATA%\Glyphdrift</code> on Windows or
+        <code>~/Library/Application Support/Glyphdrift</code> on a Mac. They never leave your
+        computer. Deleting that folder removes them.</li>
       <li>If you turn on <em>Start with Windows</em>, the app adds one entry to your user's startup
-        list in the Windows registry. Turning the option off removes it.</li>
+        list in the Windows registry. On a Mac, <em>Open at Login</em> adds one file,
+        <code>~/Library/LaunchAgents/com.sectr99.glyphdrift.plist</code>. Turning the option off
+        removes it.</li>
     </ul>
 
     <h2>This website</h2>
@@ -88,7 +91,7 @@
       <a href="https://github.com/Sectr99/GlyphDrift">GitHub</a>
       <a href="https://github.com/Sectr99/GlyphDrift/issues">Contact</a>
     </div>
-    <p class="trademarks">Windows is a trademark of the Microsoft group of companies. Theme names are
+    <p class="trademarks">Windows is a trademark of the Microsoft group of companies. Mac and macOS are trademarks of Apple Inc., registered in the U.S. and other countries. Theme names are
       trademarks of their respective owners and are used only to describe color palettes; Glyphdrift
       is an independent project, not affiliated with or endorsed by any of them.</p>
   </footer>

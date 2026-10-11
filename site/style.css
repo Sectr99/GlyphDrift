@@ -111,6 +111,8 @@ h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
 .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .features article { padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .features p, .groups p, .steps p { margin: 0; color: var(--muted); font-size: 15px; }
+.steps p + p { margin-top: 6px; }
+.steps strong { color: var(--text); font-weight: 600; }
 
 .groups { display: grid; gap: 0; border-top: 1px solid var(--line); }
 .groups > div { display: grid; grid-template-columns: 140px 1fr; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }

@@ -1,5 +1,5 @@
 // Glyphdrift landing page: a live port of the app's Topographic drift (contour lines of
-// drifting value noise, warped around the clock box), the clock itself, and the theme picker.
+// drifting value noise, warped around the logo box) and the theme picker.
 
 // [label, background, [dim, mid, bright]] — the cool gradients from src/theme.rs.
 const THEMES = [
@@ -77,7 +77,7 @@ function fbm3(x, y, z) {
 
 const canvas = document.getElementById("terrain");
 const ctx = canvas.getContext("2d");
-const clockBox = document.querySelector(".clock");
+const markBox = document.querySelector(".mark");
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const LEVELS = 16; // contour interval: 1/LEVELS of the height range per side
@@ -94,7 +94,7 @@ function resize() {
   canvas.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   unit = Math.max(Math.min(W, H), 320);
-  const c = canvas.getBoundingClientRect(), b = clockBox.getBoundingClientRect();
+  const c = canvas.getBoundingClientRect(), b = markBox.getBoundingClientRect();
   box = { cx: b.left - c.left + b.width / 2, cy: b.top - c.top + b.height / 2, hw: b.width / 2, hh: b.height / 2 };
 }
 
@@ -181,18 +181,6 @@ function frame(now) {
 }
 new IntersectionObserver(([e]) => (visible = e.isIntersecting)).observe(canvas);
 window.addEventListener("resize", () => { resize(); draw(performance.now()); });
-
-// ---------------------------------------------------------------------------------------
-// Clock
-
-const timeEl = document.getElementById("time"), dateEl = document.getElementById("date");
-function tick() {
-  const now = new Date();
-  timeEl.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  dateEl.textContent = now.toLocaleDateString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-}
-tick();
-setInterval(tick, 1000);
 
 // ---------------------------------------------------------------------------------------
 // Themes

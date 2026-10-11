@@ -133,8 +133,10 @@ h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
 .gallery li { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); transition: border-color 0.2s, transform 0.2s; }
 .gallery img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; background: #000; }
 .gallery p { margin: 0; padding: 9px 12px 10px; font-size: 14px; }
-.gallery span { color: var(--muted); font-size: 13px; margin-left: 4px; }
-.zoom { display: block; cursor: zoom-in; }
+.zoom { position: relative; display: block; cursor: zoom-in; }
+/* Live previews (live.js), over the still images, which show until the first frame. */
+canvas.live { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+canvas.live.on { opacity: 1; }
 .zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .gallery li:has(.zoom:hover) { border-color: var(--muted); transform: translateY(-2px); }
 .gallery li:has(.zoom:focus-visible) { border-color: var(--accent); }
@@ -158,6 +160,7 @@ html:has(.viewer[open]) { overflow: hidden; }
 .viewer figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 56px 72px 24px; max-width: 100%; max-height: 100%; }
 /* 16:10, as large as fits beside the buttons and above the caption */
 .viewer-frame {
+  position: relative;
   width: min(100vw - 144px, (100dvh - 128px) * 1.6);
   aspect-ratio: 16 / 10;
   border: 1px solid var(--line);
@@ -168,7 +171,6 @@ html:has(.viewer[open]) { overflow: hidden; }
 .viewer-frame img { display: block; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 0.2s; }
 .viewer-frame img.loaded { opacity: 1; }
 .viewer figcaption { font-size: 15px; text-align: center; }
-.viewer figcaption span { color: var(--muted); margin-left: 6px; }
 .viewer-button {
   position: fixed;
   display: grid;
@@ -191,7 +193,7 @@ html:has(.viewer[open]) { overflow: hidden; }
 .viewer-prev { left: 14px; top: 50%; transform: translateY(-50%); }
 .viewer-next { right: 14px; top: 50%; transform: translateY(-50%); }
 @media (prefers-reduced-motion: reduce) {
-  .viewer-frame img, .gallery li, .swatch, .nav { transition: none; }
+  .viewer-frame img, .gallery li, .swatch, .nav, canvas.live { transition: none; }
   .gallery li:has(.zoom:hover), .swatch:hover { transform: none; }
 }
 
@@ -288,7 +290,6 @@ html:has(.viewer[open]) { overflow: hidden; }
   .mark { margin-bottom: 30vh; }
   .gallery { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .gallery p { padding: 7px 9px 8px; font-size: 13px; }
-  .gallery span { display: block; margin: 0; font-size: 12px; }
   /* Phones: the image spans the width; buttons sit below it, clear of the image. */
   .viewer figure { padding: 64px 12px 96px; }
   .viewer-frame { width: min(100vw - 24px, (100dvh - 200px) * 1.6); }

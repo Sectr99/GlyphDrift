@@ -12,8 +12,9 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::AllocAnyThread;
 use objc2_app_kit::{
-    NSAttributedStringNSStringDrawing, NSColor, NSFont, NSFontAttributeName, NSFontWeightLight,
-    NSFontWeightRegular, NSForegroundColorAttributeName, NSGraphicsContext,
+    NSAttributedStringNSStringDrawing, NSBitmapImageFileType, NSBitmapImageRep, NSColor,
+    NSDeviceRGBColorSpace, NSFont, NSFontAttributeName, NSFontWeightLight, NSFontWeightRegular,
+    NSForegroundColorAttributeName, NSGraphicsContext,
 };
 use objc2_core_foundation::{CFRetained, CFString, CGFloat, CGPoint, CGSize};
 use objc2_core_graphics::{
@@ -22,12 +23,12 @@ use objc2_core_graphics::{
 use objc2_core_text::{CTFont, CTFontOrientation};
 use objc2_foundation::{NSAttributedString, NSDictionary, NSString};
 use objc2_metal::{
-    MTLBlendFactor, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily, MTLLibrary, MTLLoadAction, MTLOrigin,
-    MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLSize,
-    MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureType,
-    MTLTextureUsage,
+    MTLBlendFactor, MTLBlitCommandEncoder, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder,
+    MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily, MTLLibrary,
+    MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder,
+    MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
+    MTLResourceOptions, MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor,
+    MTLTextureType, MTLTextureUsage,
 };
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
@@ -815,12 +816,96 @@ impl Renderer {
     }
 }
 
+/// Draw `grid` and `shapes` offscreen, `size` points at `scale` px per point, into an RGBA
+/// bitmap: screenshots and tests, no window needed.
+pub fn render_offscreen(
+    r: &mut Renderer,
+    size: (f64, f64),
+    scale: f64,
+    grid: &Grid,
+    shapes: &[Shape],
+) -> Result<Retained<NSBitmapImageRep>, String> {
+    let (pw, ph) = (
+        (size.0 * scale).round() as usize,
+        (size.1 * scale).round() as usize,
+    );
+    // SAFETY: valid sizes and format.
+    let desc = unsafe {
+        MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+            PIXEL_FORMAT,
+            pw,
+            ph,
+            false,
+        )
+    };
+    desc.setUsage(MTLTextureUsage::RenderTarget);
+    desc.setStorageMode(MTLStorageMode::Managed);
+    let out = r
+        .device
+        .newTextureWithDescriptor(&desc)
+        .ok_or("cannot create texture")?;
+    r.build(grid, shapes, scale);
+    let cmd = r.queue.commandBuffer().ok_or("no command buffer")?;
+    r.encode(&cmd, &out, &mut None, size)?;
+    let blit = cmd.blitCommandEncoder().ok_or("no blit encoder")?;
+    blit.synchronizeResource(ProtocolObject::from_ref(&*out));
+    blit.endEncoding();
+    cmd.commit();
+    cmd.waitUntilCompleted();
+
+    let mut bgra = vec![0u8; pw * ph * 4];
+    // SAFETY: `bgra` holds the whole texture.
+    unsafe {
+        out.getBytes_bytesPerRow_fromRegion_mipmapLevel(
+            NonNull::new_unchecked(bgra.as_mut_ptr().cast()),
+            pw * 4,
+            MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize {
+                    width: pw,
+                    height: ph,
+                    depth: 1,
+                },
+            },
+            0,
+        );
+    }
+    // SAFETY: null planes make the rep allocate its own pw x ph RGBA buffer, filled within
+    // its bounds.
+    let rep = unsafe {
+        let rep = NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(), std::ptr::null_mut(), pw as isize, ph as isize,
+            8, 4, true, false, NSDeviceRGBColorSpace, (pw * 4) as isize, 32,
+        ).ok_or("cannot create bitmap")?;
+        let dst = std::slice::from_raw_parts_mut(rep.bitmapData(), pw * ph * 4);
+        for (d, s) in dst
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(bgra.as_chunks::<4>().0)
+        {
+            d.copy_from_slice(&[s[2], s[1], s[0], 255]);
+        }
+        rep
+    };
+    rep.setSize(CGSize::new(size.0, size.1));
+    Ok(rep)
+}
+
+/// `rep` as a PNG file's bytes.
+pub fn png(rep: &NSBitmapImageRep) -> Result<Vec<u8>, String> {
+    // SAFETY: an empty properties dictionary.
+    unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }
+    .map(|d| d.to_vec())
+    .ok_or_else(|| "cannot encode PNG".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::anim::{self, ANIMATIONS};
-    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSDeviceRGBColorSpace};
-    use objc2_metal::MTLBlitCommandEncoder;
 
     /// Draw every animation offscreen at 1728x1117 points (2x), timing the CPU side of a
     /// frame, and save PNGs to `target/snapshots`.
@@ -834,20 +919,6 @@ mod tests {
         let t = &crate::theme::THEMES[0];
         let mut r = Renderer::new("Menlo", 16.0, scale, t.bg, &t.cool, 0.0).unwrap();
         let (cw, ch) = r.cell_size();
-        let (pw, ph) = ((w * scale) as usize, (h * scale) as usize);
-        // SAFETY: valid sizes and format.
-        let desc = unsafe {
-            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
-                PIXEL_FORMAT,
-                pw,
-                ph,
-                false,
-            )
-        };
-        desc.setUsage(MTLTextureUsage::RenderTarget);
-        desc.setStorageMode(MTLStorageMode::Managed);
-        let out = r.device.newTextureWithDescriptor(&desc).unwrap();
-        let mut msaa = None;
         for &(name, ..) in ANIMATIONS {
             let mut a = anim::by_name(name, " .:-=+*#%@");
             let (cols, rows) = ((w / cw) as usize, (h / ch) as usize);
@@ -878,61 +949,12 @@ mod tests {
                 r.build(&grid, &shapes, scale);
             }
             let ms = start.elapsed().as_secs_f64() * 1000.0 / N as f64;
-            let cmd = r.queue.commandBuffer().unwrap();
-            r.encode(&cmd, &out, &mut msaa, (w, h)).unwrap();
-            let blit = cmd.blitCommandEncoder().unwrap();
-            blit.synchronizeResource(ProtocolObject::from_ref(&*out));
-            blit.endEncoding();
-            cmd.commit();
-            cmd.waitUntilCompleted();
             println!(
                 "{name:>14}: {ms:6.2} ms/frame CPU, {} vertices",
                 r.vertices.len()
             );
-
-            let mut bgra = vec![0u8; pw * ph * 4];
-            // SAFETY: `bgra` holds the whole texture.
-            unsafe {
-                out.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                    NonNull::new_unchecked(bgra.as_mut_ptr().cast()),
-                    pw * 4,
-                    MTLRegion {
-                        origin: MTLOrigin { x: 0, y: 0, z: 0 },
-                        size: MTLSize {
-                            width: pw,
-                            height: ph,
-                            depth: 1,
-                        },
-                    },
-                    0,
-                );
-            }
-            // SAFETY: null planes make the rep allocate its own pw x ph RGBA buffer.
-            let rep = unsafe {
-                NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
-                    NSBitmapImageRep::alloc(), std::ptr::null_mut(), pw as isize, ph as isize,
-                    8, 4, true, false, NSDeviceRGBColorSpace, (pw * 4) as isize, 32,
-                ).unwrap()
-            };
-            // SAFETY: the rep's buffer is pw x ph x 4 bytes.
-            let dst = unsafe { std::slice::from_raw_parts_mut(rep.bitmapData(), pw * ph * 4) };
-            for (d, s) in dst
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(bgra.as_chunks::<4>().0)
-            {
-                d.copy_from_slice(&[s[2], s[1], s[0], 255]);
-            }
-            // SAFETY: an empty properties dictionary.
-            let png = unsafe {
-                rep.representationUsingType_properties(
-                    NSBitmapImageFileType::PNG,
-                    &NSDictionary::new(),
-                )
-            }
-            .unwrap();
-            std::fs::write(dir.join(format!("{name}.png")), png.to_vec()).unwrap();
+            let rep = render_offscreen(&mut r, (w, h), scale, &grid, &shapes).unwrap();
+            std::fs::write(dir.join(format!("{name}.png")), png(&rep).unwrap()).unwrap();
         }
     }
 }

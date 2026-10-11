@@ -8,6 +8,7 @@ mod menu;
 mod picture;
 mod power;
 mod render;
+mod screenshots;
 mod settings;
 
 use std::cell::{OnceCell, RefCell};
@@ -295,20 +296,6 @@ impl App {
         save("theme", "name", t.name);
         self.update_status();
         settings::refresh(self);
-    }
-
-    /// A setting as the settings window shows it.
-    fn tweak_value(&self, id: usize) -> f32 {
-        let g = &self.cfg.general;
-        match id {
-            ui::SPEED => g.speed,
-            ui::FPS => g.fps as f32,
-            ui::GLASS => self.cfg.theme.glass,
-            ui::SCALE => g.scale,
-            ui::OBJECT_SCALE => g.object_scale,
-            ui::CLOCK => f32::from(u8::from(g.clock)),
-            _ => 0.0,
-        }
     }
 
     /// Apply a setting live; with `commit`, save it too.
@@ -645,6 +632,20 @@ impl Controller {
     }
 }
 
+/// A setting as the settings window shows it.
+fn tweak_value(cfg: &Config, id: usize) -> f32 {
+    let g = &cfg.general;
+    match id {
+        ui::SPEED => g.speed,
+        ui::FPS => g.fps as f32,
+        ui::GLASS => cfg.theme.glass,
+        ui::SCALE => g.scale,
+        ui::OBJECT_SCALE => g.object_scale,
+        ui::CLOCK => f32::from(u8::from(g.clock)),
+        _ => 0.0,
+    }
+}
+
 /// The renderer's font size in points, times the overall scale.
 fn font_size(cfg: &Config) -> f64 {
     (cfg.font.size as f64 * cfg.general.scale as f64)
@@ -801,6 +802,11 @@ pub fn run() -> Result<(), String> {
 
     app.run();
     Ok(())
+}
+
+/// Website images, drawn offscreen (`glyphdrift --screenshots <dir>`).
+pub fn screenshots(dir: &std::path::Path) -> Result<(), String> {
+    screenshots::run(dir)
 }
 
 /// Fatal error as an alert.

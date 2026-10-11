@@ -25,6 +25,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Posted to the wallpaper window when the user picks Pause/Resume.
 pub const WM_TOGGLE_PAUSE: u32 = WM_APP + 2;
 const WM_TRAY: u32 = WM_APP + 1;
+/// Posted to the tray window (by a second launch) to open the settings window.
+pub const WM_OPEN_SETTINGS: u32 = WM_APP + 11;
 const ID_PAUSE: usize = 1;
 /// Posted to the wallpaper window with WPARAM = index into `anim::ANIMATIONS`.
 pub const WM_SET_ANIMATION: u32 = WM_APP + 3;
@@ -200,6 +202,10 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
             DefWindowProcW(hwnd, msg, wp, lp)
         }
+        WM_OPEN_SETTINGS => {
+            crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
+            LRESULT(0)
+        }
         WM_TRAY if lp.0 as u32 == WM_RBUTTONUP => {
             let target = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
             if let Ok(menu) = CreatePopupMenu() {
@@ -279,7 +285,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     }
                     ID_AUTOSTART => {
                         if let Err(e) = crate::autostart::set(!autostart) {
-                            eprintln!("autostart: {e}");
+                            log!("autostart: {e}");
                         }
                     }
                     ID_QUIT => {

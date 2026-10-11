@@ -127,7 +127,7 @@ impl Renderer {
                     index = i;
                     break;
                 }
-                eprintln!("font: '{name}' not found");
+                log!("font: '{name}' not found");
             }
             let face = fonts
                 .GetFontFamily(index)?
@@ -195,7 +195,7 @@ impl Renderer {
             if e.code() == D2DERR_RECREATE_TARGET {
                 self.target = None; // rebuilt on the next frame
             } else {
-                eprintln!("render: {e}");
+                log!("render: {e}");
             }
         }
     }

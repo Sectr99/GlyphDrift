@@ -5,7 +5,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{w, Error, Result};
 use windows::Win32::Foundation::{
-    CloseHandle, BOOL, COLORREF, HANDLE, HWND, LPARAM, LRESULT, WAIT_OBJECT_0, WPARAM,
+    CloseHandle, GetLastError, BOOL, COLORREF, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT,
+    WAIT_OBJECT_0, WPARAM,
 };
 use windows::Win32::Globalization::{
     GetDateFormatEx, GetTimeFormatEx, DATE_LONGDATE, TIME_NOSECONDS,
@@ -13,20 +14,21 @@ use windows::Win32::Globalization::{
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
-    CreateWaitableTimerExW, SetWaitableTimer, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE,
-    TIMER_ALL_ACCESS,
+    CreateMutexW, CreateWaitableTimerExW, SetWaitableTimer, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+    INFINITE, TIMER_ALL_ACCESS,
 };
 use windows::Win32::UI::HiDpi::{
     GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
-    IsDialogMessageW, IsWindow, MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW,
-    PostQuitMessage, RegisterClassW, SendMessageW, SetLayeredWindowAttributes, SetParent,
-    SetWindowLongPtrW, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR,
-    MB_OK, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW,
-    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
+    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    FindWindowW, GetWindowLongPtrW, GetWindowThreadProcessId, IsDialogMessageW, IsWindow,
+    MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, PostQuitMessage,
+    RegisterClassW, SendMessageW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
+    TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR, MB_OK, MSG,
+    MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_ERASEBKGND, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
+    WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 use crate::anim::{self, Animation};
@@ -95,6 +97,8 @@ struct App {
     config_mtime: Option<SystemTime>,
     user_paused: bool,
     auto_paused: bool,
+    /// Time and date last shown, when the clock is on.
+    clock: Option<[String; 2]>,
 }
 
 impl App {
@@ -143,8 +147,8 @@ impl App {
     /// Capture the animation's current frame: grid cells plus vector shapes.
     fn render_frame(&mut self) {
         self.anim.render(&mut self.grid);
-        self.anim
-            .set_clock(self.cfg.general.clock.then(local_clock).as_ref());
+        self.clock = self.cfg.general.clock.then(local_clock);
+        self.anim.set_clock(self.clock.as_ref());
         self.shapes.clear();
         self.anim.draw(&mut self.shapes);
     }
@@ -160,7 +164,7 @@ impl App {
             0.0,
         ) {
             Ok(r) => self.renderer = r,
-            Err(e) => eprintln!("render: rebuild failed: {e}"),
+            Err(e) => log!("render: rebuild failed: {e}"),
         }
         self.apply_colors();
         self.resize(self.width, self.height);
@@ -251,7 +255,7 @@ impl App {
         self.config_mtime = mtime;
         let (cfg, warnings) = config::load();
         for w in &warnings {
-            eprintln!("config: {w}");
+            log!("config: {w}");
         }
         let old = std::mem::replace(&mut self.cfg, cfg);
         let (new_font, new_anim) = (
@@ -274,7 +278,7 @@ impl App {
                 0.0,
             ) {
                 Ok(r) => self.renderer = r,
-                Err(e) => eprintln!("config: font change failed: {e}"),
+                Err(e) => log!("config: font change failed: {e}"),
             }
         }
         if new_anim {
@@ -341,7 +345,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.last_frame = Instant::now();
                     app.timer.set(app.interval_ms());
                 }
-                if !app.paused() {
+                if app.paused() {
+                    // Keep the clock current while paused (ticks are 1 s apart here).
+                    if app.cfg.general.clock && app.clock != Some(local_clock()) {
+                        app.render_frame();
+                        let _ = InvalidateRect(hwnd, None, BOOL(0));
+                    }
+                } else {
                     let now = Instant::now();
                     let dt = now.duration_since(app.last_frame).as_secs_f32().min(0.25);
                     app.last_frame = now;
@@ -480,7 +490,7 @@ fn decimal(v: f32) -> f64 {
 /// Persist a tray choice; failure only costs the setting surviving a restart.
 fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
     if let Err(e) = config::save(section, key, value) {
-        eprintln!("config: could not save {section}.{key}: {e}");
+        log!("config: could not save {section}.{key}: {e}");
     }
 }
 
@@ -495,10 +505,14 @@ pub fn run() -> Result<()> {
     }
 
     config::migrate();
+    if !first_instance() {
+        return Ok(());
+    }
+    crate::log::init();
     crate::autostart::migrate();
     let (cfg, warnings) = config::load();
     for w in &warnings {
-        eprintln!("config: {w}");
+        log!("config: {w}");
     }
 
     let anim = anim::by_name(&cfg.general.animation, &cfg.theme.ramp);
@@ -536,6 +550,7 @@ pub fn run() -> Result<()> {
             config_mtime: config::modified(),
             user_paused: false,
             auto_paused: false,
+            clock: None,
         }));
 
         let result = (|| -> Result<()> {
@@ -609,6 +624,26 @@ pub fn run() -> Result<()> {
     }
 }
 
+/// True for the first running copy. A second launch asks the first to open its settings
+/// window (so "run it again" does something visible) and should then exit.
+fn first_instance() -> bool {
+    // SAFETY: plain Win32 calls with constant strings. The mutex handle is deliberately
+    // never closed: it marks this process as running until it exits.
+    unsafe {
+        let mutex = CreateMutexW(None, false, w!("Local\\WallMotion"));
+        if mutex.is_ok() && GetLastError() != ERROR_ALREADY_EXISTS {
+            return true;
+        }
+        if let Ok(tray) = FindWindowW(w!("WallMotionTray"), None) {
+            let mut pid = 0;
+            GetWindowThreadProcessId(tray, Some(&mut pid));
+            let _ = AllowSetForegroundWindow(pid); // let it bring the settings window forward
+            let _ = PostMessageW(tray, tray::WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
+        }
+        false
+    }
+}
+
 /// The local time (no seconds) and long date, in the user's regional format.
 fn local_clock() -> [String; 2] {
     let (mut time, mut date) = ([0u16; 64], [0u16; 128]);
@@ -627,6 +662,7 @@ fn local_clock() -> [String; 2] {
 
 /// Show a fatal error. Release builds have no console, so use a message box.
 pub fn fatal(text: &str) {
+    crate::log::write(&format!("fatal: {text}"));
     let body: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: both strings are NUL-terminated and outlive the call.
     unsafe {

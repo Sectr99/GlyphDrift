@@ -3,32 +3,37 @@
 //! readers work for free. Changes apply as you drag and are saved when you let go; the window
 //! talks to the wallpaper window with messages, like the tray menu.
 
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::core::{w, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    BOOL, COLORREF, ERROR_SUCCESS, HWND, LPARAM, LRESULT, RECT, WPARAM,
+};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::Graphics::Gdi::{
     CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColor,
-    GetSysColorBrush, SetBkMode, SetTextColor, COLOR_BTNFACE, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
-    COLOR_WINDOW, COLOR_WINDOWTEXT, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HBRUSH, HFONT, TRANSPARENT,
+    GetSysColorBrush, SetBkColor, SetBkMode, SetTextColor, COLOR_BTNFACE, COLOR_HIGHLIGHT,
+    COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
+    HBRUSH, HDC, HGDIOBJ, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, DRAWITEMSTRUCT, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX, MEASUREITEMSTRUCT,
-    ODS_SELECTED, TBM_SETPOS, TBM_SETRANGE, TB_ENDTRACK, TRACKBAR_CLASSW,
+    InitCommonControlsEx, SetWindowTheme, DRAWITEMSTRUCT, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
+    MEASUREITEMSTRUCT, ODS_SELECTED, TBM_SETPOS, TBM_SETRANGE, TB_ENDTRACK, TRACKBAR_CLASSW,
 };
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetDlgCtrlID, GetDlgItem,
-    GetSystemMetrics, IsWindow, LoadIconW, PostMessageW, RegisterClassW, SendMessageW,
-    SetForegroundWindow, SetWindowTextW, ShowWindow, SystemParametersInfoW, BM_GETCHECK,
-    BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL,
-    CB_SETCURSEL, HMENU, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL,
-    NONCLIENTMETRICSW, SM_CXSCREEN, SM_CYSCREEN, SPI_GETNONCLIENTMETRICS, SW_RESTORE,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_DRAWITEM, WM_HSCROLL, WM_MEASUREITEM, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD,
-    WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
+    GetDlgCtrlID, GetDlgItem, GetSystemMetrics, IsWindow, LoadIconW, PostMessageW, RegisterClassW,
+    SendMessageW, SetForegroundWindow, SetWindowTextW, ShowWindow, SystemParametersInfoW,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CB_ADDSTRING,
+    CB_GETCURSEL, CB_SETCURSEL, HMENU, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL,
+    LB_SETCURSEL, NONCLIENTMETRICSW, SM_CXSCREEN, SM_CYSCREEN, SPI_GETNONCLIENTMETRICS, SW_RESTORE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CREATE,
+    WM_CTLCOLORBTN, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND,
+    WM_HSCROLL, WM_MEASUREITEM, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::anim::ANIMATIONS;
@@ -61,6 +66,8 @@ const ID_ANIMATION: usize = 100;
 const ID_THEME: usize = 101;
 const ID_RESET: usize = 102;
 const ID_CLOCK: usize = 103;
+const ID_CLOCK_LABEL: usize = 104;
+const SS_NOTIFY: u32 = 0x100;
 const ID_CLOSE: usize = 2; // IDCANCEL, so Esc closes the window
 const ID_SLIDER: usize = 200; // + tweak id
 const ID_VALUE: usize = 300; // + tweak id
@@ -74,6 +81,59 @@ const CLIENT_W: i32 = 520;
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 static FONT: AtomicIsize = AtomicIsize::new(0);
+static DARK: AtomicBool = AtomicBool::new(false);
+static BG_BRUSH: AtomicIsize = AtomicIsize::new(0);
+static SURFACE_BRUSH: AtomicIsize = AtomicIsize::new(0);
+
+/// Window colors: Windows' own in light mode, Windows 11's dark palette in dark mode.
+struct Palette {
+    /// Window background.
+    bg: COLORREF,
+    /// List and dropdown background.
+    surface: COLORREF,
+    text: COLORREF,
+}
+
+fn palette() -> Palette {
+    if DARK.load(Ordering::Relaxed) {
+        Palette {
+            bg: COLORREF(0x202020),
+            surface: COLORREF(0x2b2b2b),
+            text: COLORREF(0xf0f0f0),
+        }
+    } else {
+        // SAFETY: no preconditions.
+        unsafe {
+            Palette {
+                bg: COLORREF(GetSysColor(COLOR_BTNFACE)),
+                surface: COLORREF(GetSysColor(COLOR_WINDOW)),
+                text: COLORREF(GetSysColor(COLOR_WINDOWTEXT)),
+            }
+        }
+    }
+}
+
+/// True when Windows is set to dark mode for apps (Settings > Personalization > Colors).
+fn apps_use_dark() -> bool {
+    let (mut light, mut size) = (1u32, 4u32);
+    // SAFETY: `light` and `size` are live locals; `size` holds the buffer size in bytes.
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut light as *mut u32 as *mut _),
+            Some(&mut size),
+        )
+    };
+    r == ERROR_SUCCESS && light == 0
+}
+
+fn brush(slot: &AtomicIsize) -> HBRUSH {
+    HBRUSH(slot.load(Ordering::Relaxed) as *mut _)
+}
 
 fn slider_pos(id: usize, value: f32) -> i32 {
     match id {
@@ -126,6 +186,8 @@ pub fn open(wallpaper: HWND) {
             return;
         }
         TARGET.store(wallpaper.0 as isize, Ordering::Relaxed);
+        // ponytail: read once per open; a theme switch applies the next time it opens.
+        DARK.store(apps_use_dark(), Ordering::Relaxed);
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
             dwICC: ICC_BAR_CLASSES,
@@ -218,6 +280,22 @@ unsafe fn build(hwnd: HWND) {
         CreateFontIndirectW(&ncm.lfMessageFont)
     };
     FONT.store(font.0 as isize, Ordering::Relaxed);
+    let colors = palette();
+    BG_BRUSH.store(CreateSolidBrush(colors.bg).0 as isize, Ordering::Relaxed);
+    SURFACE_BRUSH.store(
+        CreateSolidBrush(colors.surface).0 as isize,
+        Ordering::Relaxed,
+    );
+    let dark = DARK.load(Ordering::Relaxed);
+    if dark {
+        let on = BOOL(1);
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &on as *const BOOL as *const _,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
     let control = |class: PCWSTR,
                    text: &str,
                    style: WINDOW_STYLE,
@@ -239,6 +317,18 @@ unsafe fn build(hwnd: HWND) {
         )
         .unwrap_or_default();
         SendMessageW(child, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+        if dark {
+            // Windows' own dark control styles (as in Explorer and the file dialogs).
+            match class.to_string().unwrap_or_default().as_str() {
+                "STATIC" => {}
+                "COMBOBOX" => {
+                    let _ = SetWindowTheme(child, w!("DarkMode_CFD"), PCWSTR::null());
+                }
+                _ => {
+                    let _ = SetWindowTheme(child, w!("DarkMode_Explorer"), PCWSTR::null());
+                }
+            }
+        }
         child
     };
     let full = CLIENT_W - 2 * M;
@@ -316,12 +406,21 @@ unsafe fn build(hwnd: HWND) {
         ); // SS_RIGHT
         y += 36;
     }
+    // The checkbox is only as wide as its box (its text stays, for screen readers) and a
+    // clickable label sits beside it: themed checkboxes ignore the dark text color.
     control(
         w!("BUTTON"),
         "Show clock (Topographic drift)",
         WINDOW_STYLE(BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
-        (M, y, full, 24),
+        (M, y, 14, 24),
         ID_CLOCK,
+    );
+    control(
+        w!("STATIC"),
+        "Show clock (Topographic drift)",
+        WINDOW_STYLE(SS_NOTIFY),
+        (M + 20, y + 3, full - 20, LABEL_H),
+        ID_CLOCK_LABEL,
     );
     y += 28 + 8;
     control(
@@ -404,23 +503,19 @@ unsafe fn draw_theme_row(d: &DRAWITEMSTRUCT) {
     };
     let selected = d.itemState.0 & ODS_SELECTED.0 != 0;
     let rc = d.rcItem;
-    FillRect(
-        d.hDC,
-        &rc,
-        GetSysColorBrush(if selected {
-            COLOR_HIGHLIGHT
-        } else {
-            COLOR_WINDOW
-        }),
-    );
+    if selected {
+        FillRect(d.hDC, &rc, GetSysColorBrush(COLOR_HIGHLIGHT));
+    } else {
+        FillRect(d.hDC, &rc, brush(&SURFACE_BRUSH));
+    }
     SetBkMode(d.hDC, TRANSPARENT);
     SetTextColor(
         d.hDC,
-        COLORREF(GetSysColor(if selected {
-            COLOR_HIGHLIGHTTEXT
+        if selected {
+            COLORREF(GetSysColor(COLOR_HIGHLIGHTTEXT))
         } else {
-            COLOR_WINDOWTEXT
-        })),
+            palette().text
+        },
     );
     let s = dpi_scale();
     let name_w = px(150, s);
@@ -474,6 +569,24 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
             build(hwnd);
             LRESULT(0)
         }
+        WM_ERASEBKGND => {
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            FillRect(HDC(wp.0 as *mut _), &rc, brush(&BG_BRUSH));
+            LRESULT(1)
+        }
+        WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX => {
+            let colors = palette();
+            let (bg, slot) = if msg == WM_CTLCOLORLISTBOX {
+                (colors.surface, &SURFACE_BRUSH)
+            } else {
+                (colors.bg, &BG_BRUSH)
+            };
+            let hdc = HDC(wp.0 as *mut _);
+            SetTextColor(hdc, colors.text);
+            SetBkColor(hdc, bg);
+            LRESULT(brush(slot).0 as isize)
+        }
         WM_MEASUREITEM => {
             let m = &mut *(lp.0 as *mut MEASUREITEMSTRUCT);
             m.itemHeight = px(ROW_H, dpi_scale()) as u32;
@@ -505,8 +618,14 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                             PostMessageW(target(), WM_SET_THEME, WPARAM(sel as usize), LPARAM(0));
                     }
                 }
-                ID_CLOCK => {
-                    let on = SendMessageW(source, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0;
+                ID_CLOCK | ID_CLOCK_LABEL if code == 0 => {
+                    // BN_CLICKED / STN_CLICKED; a label click toggles the checkbox itself.
+                    let check = GetDlgItem(hwnd, ID_CLOCK as i32).unwrap_or_default();
+                    let mut on = SendMessageW(check, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0;
+                    if id == ID_CLOCK_LABEL {
+                        on = !on;
+                        SendMessageW(check, BM_SETCHECK, WPARAM(usize::from(on)), LPARAM(0));
+                    }
                     tweak(CLOCK, f32::from(u8::from(on)), true);
                 }
                 ID_RESET => {
@@ -538,9 +657,11 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
         }
         WM_DESTROY => {
             WINDOW.store(0, Ordering::Relaxed);
-            let font = FONT.swap(0, Ordering::Relaxed);
-            if font != 0 {
-                let _ = DeleteObject(HFONT(font as *mut _));
+            for slot in [&FONT, &BG_BRUSH, &SURFACE_BRUSH] {
+                let object = slot.swap(0, Ordering::Relaxed);
+                if object != 0 {
+                    let _ = DeleteObject(HGDIOBJ(object as *mut _));
+                }
             }
             LRESULT(0)
         }

@@ -24,6 +24,8 @@ pub struct Changed {
     pub frame: bool,
     /// macOS: Match menu bar to theme was turned on or off.
     pub menu_bar: bool,
+    /// macOS: Show on lock screen was turned on or off.
+    pub lock_screen: bool,
 }
 
 /// A setting as the settings window shows it.
@@ -110,6 +112,7 @@ pub fn reloaded(old: &Config, new: &Config) -> Changed {
         layout: o.object_scale != n.object_scale,
         frame: o.clock != n.clock,
         menu_bar: o.match_menu_bar != n.match_menu_bar,
+        lock_screen: o.lock_screen != n.lock_screen,
     }
 }
 
@@ -201,8 +204,9 @@ mod tests {
         new.general.animation = "topo".into();
         new.general.scale = 1.5;
         new.general.match_menu_bar = true;
+        new.general.lock_screen = !old.general.lock_screen;
         let c = reloaded(&old, &new);
-        assert!(c.animation && c.frame_rate && c.font && c.menu_bar);
+        assert!(c.animation && c.frame_rate && c.font && c.menu_bar && c.lock_screen);
         assert!(!c.layout && !c.frame);
         new = old.clone();
         new.theme.ramp = " .#".into();

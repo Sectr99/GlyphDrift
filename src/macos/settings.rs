@@ -28,7 +28,7 @@ const ROW_H: f64 = 34.0;
 const LABEL_W: f64 = 130.0;
 const VALUE_W: f64 = 52.0;
 /// Rows: animation, theme, the sliders, frame rate, clock; then the buttons.
-const ROWS: usize = 5 + SLIDERS.len();
+const ROWS: usize = 6 + SLIDERS.len();
 
 /// (tweak id, slider, value label, name label)
 type SliderRow = (
@@ -46,6 +46,7 @@ struct Settings {
     fps: Retained<NSPopUpButton>,
     clock: Retained<NSButton>,
     menu_bar: Retained<NSButton>,
+    lock_screen: Retained<NSButton>,
 }
 
 thread_local! {
@@ -122,6 +123,7 @@ fn show(s: &Settings, cfg: &Config) {
         }
         s.clock.setEnabled(clock);
         s.menu_bar.setState(isize::from(cfg.general.match_menu_bar));
+        s.lock_screen.setState(isize::from(cfg.general.lock_screen));
     }
 }
 
@@ -397,6 +399,22 @@ fn build(mtm: MainThreadMarker, target: &Controller) -> Settings {
     place(&menu_bar, row + 2, control_x, control_w);
 
     // SAFETY: as above.
+    let lock_screen = unsafe {
+        NSButton::checkboxWithTitle_target_action(
+            ns_string!("Show on lock screen"),
+            Some(target),
+            Some(sel!(toggleLockScreen:)),
+            mtm,
+        )
+    };
+    lock_screen.setToolTip(Some(ns_string!(
+        "Sets the desktop picture to a still frame of the animation, which the lock screen \
+         shows, redrawn every few minutes. Your own picture comes back when you turn this off \
+         or quit."
+    )));
+    place(&lock_screen, row + 3, control_x, control_w);
+
+    // SAFETY: as above.
     let (reset, close) = unsafe {
         (
             NSButton::buttonWithTitle_target_action(
@@ -446,5 +464,6 @@ fn build(mtm: MainThreadMarker, target: &Controller) -> Settings {
         fps,
         clock,
         menu_bar,
+        lock_screen,
     }
 }

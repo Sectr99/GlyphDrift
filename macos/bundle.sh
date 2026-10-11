@@ -32,8 +32,8 @@ iconutil -c icns -o "$app/Contents/Resources/Glyphdrift.icns" "$iconset"
 
 sed "s/VERSION/$version/g" macos/Info.plist > "$app/Contents/Info.plist"
 
-# Ad-hoc signature: required on Apple silicon. Not notarized, so Gatekeeper asks on first
-# open (right-click > Open, or System Settings > Privacy & Security > Open Anyway).
+# Ad-hoc signature: required on Apple silicon. Not notarized, so Gatekeeper blocks the first
+# launch until the user clicks Open Anyway in System Settings > Privacy & Security.
 codesign --force --sign - "$app"
 
 # A fixed name, so releases/latest/download/Glyphdrift-macos.zip always works.

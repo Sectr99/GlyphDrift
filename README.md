@@ -34,7 +34,7 @@ Changes apply immediately and are remembered.
 
 ## macOS
 
-Unzip `Glyphdrift-macos.zip` from the [latest release](https://github.com/Sectr99/GlyphDrift/releases/latest) and move **Glyphdrift.app** to Applications. It isn't notarized yet, so the first time, right-click it and choose **Open** (or allow it under System Settings > Privacy & Security). It lives in the menu bar, with no Dock icon:
+Unzip `Glyphdrift-macos.zip` from the [latest release](https://github.com/Sectr99/GlyphDrift/releases/latest) and move **Glyphdrift.app** to Applications. It isn't notarized yet, so macOS blocks the first launch: open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**. It lives in the menu bar, with no Dock icon:
 
 - The menu bar icon's menu has **Settings…**, **Animation**, **Theme**, **Show clock**, **Open at Login**, **Pause / Resume** and **Quit**. Opening the app again also opens Settings.
 - Settings has the same controls as on Windows and opens at the top right, so the wallpaper stays visible.

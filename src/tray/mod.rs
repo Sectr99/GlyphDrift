@@ -1,5 +1,5 @@
-//! Notification-area icon with Animation, Theme, Speed, Glass and Frame rate pickers,
-//! Start with Windows, Pause/Resume and Quit.
+//! Notification-area icon. Left-click opens the settings window; the right-click menu keeps
+//! the quick actions: Settings, Animation, Show clock, Start with Windows, Pause and Quit.
 //!
 //! Uses its own hidden top-level window: the wallpaper window is a child of WorkerW and
 //! cannot reliably take foreground focus, which popup menus require.
@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, CREATESTRUCTW, GWLP_USERDATA, HICON,
     HMENU, IDI_APPLICATION, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
     SM_CXSMICON, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY,
-    WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
+    WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
 };
 
 /// Posted to the wallpaper window when the user picks Pause/Resume.
@@ -34,32 +34,19 @@ pub const WM_SET_ANIMATION: u32 = WM_APP + 3;
 pub const WM_SET_THEME: u32 = WM_APP + 4;
 /// Sent to the wallpaper window; returns `pack_state` of the current selections.
 pub const WM_GET_STATE: u32 = WM_APP + 5;
-/// Posted to the wallpaper window with WPARAM = index into `anim::SPEEDS`.
-pub const WM_SET_SPEED: u32 = WM_APP + 6;
-/// Posted to the wallpaper window with WPARAM = index into `theme::GLASS`.
-pub const WM_SET_GLASS: u32 = WM_APP + 7;
-/// Posted to the wallpaper window with WPARAM = index into `anim::FRAME_RATES`.
-pub const WM_SET_FPS: u32 = WM_APP + 8;
 const ID_QUIT: usize = 2;
 const ID_AUTOSTART: usize = 3;
 const ID_SETTINGS: usize = 4;
 const ID_CLOCK: usize = 5;
 const ID_ANIM_BASE: usize = 100;
-const ID_THEME_BASE: usize = 200;
-const ID_SPEED_BASE: usize = 300;
-const ID_GLASS_BASE: usize = 400;
-const ID_FPS_BASE: usize = 500;
-
-/// Current menu selections (preset indices), one byte each, as the WM_GET_STATE result.
-pub fn pack_state(anim: usize, theme: usize, speed: usize, glass: usize, fps: usize) -> isize {
-    [anim, theme, speed, glass, fps]
-        .iter()
-        .enumerate()
-        .fold(0, |acc, (i, &v)| acc | (v & 0xFF) << (8 * i)) as isize
+/// The WM_GET_STATE result: animation index in the low byte, theme index in the next.
+pub fn pack_state(anim: usize, theme: usize) -> isize {
+    ((anim & 0xFF) | (theme & 0xFF) << 8) as isize
 }
 
-fn unpack_state(v: isize) -> [usize; 5] {
-    std::array::from_fn(|i| (v as usize >> (8 * i)) & 0xFF)
+/// The animation and theme indices from a WM_GET_STATE result.
+pub fn unpack_state(v: isize) -> (usize, usize) {
+    (v as usize & 0xFF, (v as usize >> 8) & 0xFF)
 }
 
 /// Submenu of radio items `base + i`, with `checked` marked. Each item is (label, group);
@@ -206,32 +193,20 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
             LRESULT(0)
         }
+        WM_TRAY if lp.0 as u32 == WM_LBUTTONUP => {
+            crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
+            LRESULT(0)
+        }
         WM_TRAY if lp.0 as u32 == WM_RBUTTONUP => {
             let target = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
             if let Ok(menu) = CreatePopupMenu() {
                 let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings…"));
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-                let [anim_i, theme_i, speed_i, glass_i, fps_i] =
+                let (anim_i, _) =
                     unpack_state(SendMessageW(target, WM_GET_STATE, WPARAM(0), LPARAM(0)).0);
                 let anims = crate::anim::ANIMATIONS.iter().map(|a| (a.1, a.2));
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Animation"));
-                }
-                let themes = crate::theme::THEMES.iter().map(|t| (t.label, t.group));
-                if let Some(sub) = radio_submenu(themes, ID_THEME_BASE, theme_i) {
-                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Theme"));
-                }
-                let speeds = crate::anim::SPEEDS.iter().map(|s| (s.1, ""));
-                if let Some(sub) = radio_submenu(speeds, ID_SPEED_BASE, speed_i) {
-                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Speed"));
-                }
-                let glass = crate::theme::GLASS.iter().map(|g| (g.1, ""));
-                if let Some(sub) = radio_submenu(glass, ID_GLASS_BASE, glass_i) {
-                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Glass"));
-                }
-                let rates = crate::anim::FRAME_RATES.iter().map(|r| (r.1, ""));
-                if let Some(sub) = radio_submenu(rates, ID_FPS_BASE, fps_i) {
-                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Frame rate"));
                 }
                 let clock = SendMessageW(
                     target,
@@ -290,34 +265,6 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     }
                     ID_QUIT => {
                         let _ = PostMessageW(target, WM_CLOSE, WPARAM(0), LPARAM(0));
-                    }
-                    id if id >= ID_FPS_BASE => {
-                        let _ =
-                            PostMessageW(target, WM_SET_FPS, WPARAM(id - ID_FPS_BASE), LPARAM(0));
-                    }
-                    id if id >= ID_GLASS_BASE => {
-                        let _ = PostMessageW(
-                            target,
-                            WM_SET_GLASS,
-                            WPARAM(id - ID_GLASS_BASE),
-                            LPARAM(0),
-                        );
-                    }
-                    id if id >= ID_SPEED_BASE => {
-                        let _ = PostMessageW(
-                            target,
-                            WM_SET_SPEED,
-                            WPARAM(id - ID_SPEED_BASE),
-                            LPARAM(0),
-                        );
-                    }
-                    id if id >= ID_THEME_BASE => {
-                        let _ = PostMessageW(
-                            target,
-                            WM_SET_THEME,
-                            WPARAM(id - ID_THEME_BASE),
-                            LPARAM(0),
-                        );
                     }
                     id if id >= ID_ANIM_BASE => {
                         let _ = PostMessageW(

@@ -235,14 +235,6 @@ pub const THEMES: &[Theme] = &[
     ),
 ];
 
-/// Glass veil presets offered in the tray: (opacity, menu label).
-pub const GLASS: &[(f32, &str)] = &[
-    (0.0, "Off"),
-    (0.3, "Light"),
-    (0.5, "Medium"),
-    (0.7, "Strong"),
-];
-
 /// Blend `a` toward `b` by `f` (0 = a, 1 = b).
 pub fn mix(a: Rgb, b: Rgb, f: f32) -> Rgb {
     let m = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * f).round() as u8;

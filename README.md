@@ -10,17 +10,20 @@ A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behin
 
 ## Use
 
-Run `wallmotion.exe`. Everything is controlled from its tray icon (right-click):
+Run `wallmotion.exe`. Left-click its tray icon (or run it again) to open **Settings**, which opens beside the tray so the wallpaper stays visible as a live preview:
+
+- **Animation**, grouped (ASCII, Graphics, Loops, Fluid, Contour)
+- **Theme**, with swatches of each theme's colors
+- Sliders for **speed**, **frame rate**, **glass** (a frosted veil so icon labels stay readable), **overall scale** and **object scale**
+- **Show clock**: time and date (your regional format) in a framed box at the center of Topographic drift; the contour lines flow around it
+
+Controls that don't apply to the current animation are greyed out. Right-click the tray icon for quick actions:
 
 | Menu | What it does |
 |---|---|
-| Settings… | A settings window: animation, theme list with color swatches, and live sliders for speed, frame rate, glass, overall scale and object scale, plus the clock toggle |
-| Show clock | Time and date (your regional format) in a framed box at the center of Topographic drift; the contour lines flow around it |
+| Settings… | Open the settings window |
 | Animation | Switch animation |
-| Theme | Switch color theme |
-| Speed | 0.25× to 2× |
-| Frame rate | Auto (24 FPS for ASCII, 30 for graphics), 30 or 60 FPS; higher is smoother but uses more CPU |
-| Glass | Frosted veil over the animation (Off / Light / Medium / Strong) so icon labels stay readable |
+| Show clock | Toggle the Topographic drift clock |
 | Start with Windows | Run at sign-in (also listed in Settings > Apps > Startup) |
 | Pause / Resume | Stop or restart the animation |
 | Quit | Exit and restore the normal wallpaper |
@@ -29,7 +32,7 @@ Changes apply immediately and are remembered.
 
 ## Configuration
 
-Settings live in `%APPDATA%\WallMotion\config.toml`, created when you first change something from the tray. You can also edit it by hand; changes apply within a second, no restart needed. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
+Settings live in `%APPDATA%\WallMotion\config.toml`, created when you first change something in Settings or the tray. You can also edit it by hand; changes apply within a second, no restart needed. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
 
 ## Uninstall
 

@@ -155,32 +155,6 @@ pub const ANIMATIONS: &[(&str, &str, &str)] = &[
 ];
 
 /// Speed presets offered in the tray: (multiplier, menu label).
-pub const SPEEDS: &[(f32, &str)] = &[
-    (0.25, "0.25×"),
-    (0.5, "0.5×"),
-    (0.75, "0.75×"),
-    (1.0, "1× (normal)"),
-    (1.5, "1.5×"),
-    (2.0, "2×"),
-];
-
-/// Frame-rate presets offered in the tray: (fps, menu label); 0 = each animation's own.
-pub const FRAME_RATES: &[(f32, &str)] = &[
-    (0.0, "Auto (24 ASCII / 30 graphics)"),
-    (30.0, "30 fps"),
-    (60.0, "60 fps"),
-];
-
-/// Index of the preset closest to `v`, so a hand-edited config still gets a check mark.
-pub fn nearest(presets: &[(f32, &str)], v: f32) -> usize {
-    (0..presets.len())
-        .min_by(|&a, &b| {
-            let d = |i: usize| (presets[i].0 - v).abs();
-            d(a).total_cmp(&d(b))
-        })
-        .unwrap_or(0)
-}
-
 /// Index into `ANIMATIONS`; unknown names give 0 (matrix).
 pub fn index_of(name: &str) -> usize {
     ANIMATIONS.iter().position(|a| a.0 == name).unwrap_or(0)
@@ -329,13 +303,6 @@ mod tests {
             lo < 20.0 && hi > 3180.0,
             "ridgelines span {lo}..{hi}, not the whole desktop"
         );
-    }
-
-    #[test]
-    fn nearest_picks_closest_preset() {
-        assert_eq!(SPEEDS[nearest(SPEEDS, 1.0)].0, 1.0);
-        assert_eq!(SPEEDS[nearest(SPEEDS, 0.6)].0, 0.5);
-        assert_eq!(SPEEDS[nearest(SPEEDS, 9.0)].0, 2.0);
     }
 
     #[test]

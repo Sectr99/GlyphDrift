@@ -1,5 +1,5 @@
 # Copy to %APPDATA%\WallMotion\config.toml
-# The tray menu's Animation and Theme choices are saved back into this file.
+# Changes made in the Settings window and tray menu are saved back into this file.
 
 [general]
 fps = 0                       # 0 = auto (24 ASCII, 30 graphics), else 1..=60

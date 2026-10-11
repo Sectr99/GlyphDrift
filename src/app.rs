@@ -24,11 +24,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     FindWindowW, GetWindowLongPtrW, GetWindowThreadProcessId, IsDialogMessageW, IsWindow,
     MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, PostQuitMessage,
-    RegisterClassW, SendMessageW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
-    TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR, MB_OK, MSG,
-    MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_ERASEBKGND, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
-    WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
+    RegisterClassW, SendMessageW, SetLayeredWindowAttributes, SetParent, SetTimer,
+    SetWindowLongPtrW, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR,
+    MB_OK, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW,
+    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 use crate::anim::{self, Animation};
@@ -43,12 +43,20 @@ use crate::theme::{self, THEMES};
 use crate::tray;
 
 const TIMER_ID: usize = 1;
+/// A plain WM_TIMER at the frame interval. Modal loops (dragging a scrollbar, moving the
+/// settings window, an open tray menu) run their own message pump, so the waitable timer
+/// below goes unserviced; they still dispatch WM_TIMER, which keeps frames coming.
+const FALLBACK_TIMER_ID: usize = 2;
 const PAUSED_INTERVAL_MS: u32 = 1000;
 
 /// Frame clock. WM_TIMER fires on the ~15.6 ms system tick, so asking for 33 ms gives
 /// ~21 fps; a high-resolution waitable timer (Windows 10 1803+) gives the real rate without
 /// raising the system-wide timer resolution. Older systems fall back to a normal timer.
-struct FrameTimer(HANDLE);
+struct FrameTimer {
+    handle: HANDLE,
+    /// Window for the fallback WM_TIMER; set once the window exists.
+    window: HWND,
+}
 
 impl FrameTimer {
     fn new() -> Result<Self> {
@@ -57,7 +65,10 @@ impl FrameTimer {
         unsafe {
             CreateWaitableTimerExW(None, None, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, access)
                 .or_else(|_| CreateWaitableTimerExW(None, None, 0, access))
-                .map(Self)
+                .map(|handle| Self {
+                    handle,
+                    window: HWND::default(),
+                })
         }
     }
 
@@ -66,7 +77,10 @@ impl FrameTimer {
         let due = -(ms as i64 * 10_000); // negative = relative, in 100 ns units
                                          // SAFETY: `due` outlives the call; no completion routine.
         unsafe {
-            let _ = SetWaitableTimer(self.0, &due, ms as i32, None, None, false);
+            let _ = SetWaitableTimer(self.handle, &due, ms as i32, None, None, false);
+            if !self.window.is_invalid() {
+                SetTimer(self.window, FALLBACK_TIMER_ID, ms, None);
+            }
         }
     }
 }
@@ -75,7 +89,7 @@ impl Drop for FrameTimer {
     fn drop(&mut self) {
         // SAFETY: the handle came from CreateWaitableTimerExW and is closed once.
         unsafe {
-            let _ = CloseHandle(self.0);
+            let _ = CloseHandle(self.handle);
         }
     }
 }
@@ -93,6 +107,8 @@ struct App {
     seed: u64,
     last_frame: Instant,
     last_power_check: Instant,
+    /// When our own message loop last ran; stale means a modal loop has taken over.
+    last_pump: Instant,
     /// Config file mtime at last load; a change triggers a reload.
     config_mtime: Option<SystemTime>,
     user_paused: bool,
@@ -104,6 +120,11 @@ struct App {
 impl App {
     fn paused(&self) -> bool {
         self.user_paused || self.auto_paused
+    }
+
+    /// True while a modal loop owns the thread (see `FALLBACK_TIMER_ID`).
+    fn pump_stalled(&self) -> bool {
+        self.last_pump.elapsed().as_millis() > 2 * self.interval_ms() as u128 + 50
     }
 
     fn interval_ms(&self) -> u32 {
@@ -324,7 +345,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             LRESULT(0)
         }
-        WM_TIMER if wp.0 == TIMER_ID => {
+        WM_TIMER
+            if wp.0 == TIMER_ID
+                || (wp.0 == FALLBACK_TIMER_ID
+                    && app_of(hwnd).is_some_and(|a| a.pump_stalled())) =>
+        {
             if let Some(app) = app_of(hwnd) {
                 // Explorer restarted and our parent died: re-attach.
                 if !IsWindow(app.parent).as_bool() {
@@ -383,9 +408,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             Some(app) => LRESULT(tray::pack_state(
                 anim::index_of(&app.cfg.general.animation),
                 theme::index_of(&app.cfg.theme.name),
-                anim::nearest(anim::SPEEDS, app.cfg.general.speed),
-                anim::nearest(theme::GLASS, app.cfg.theme.glass),
-                anim::nearest(anim::FRAME_RATES, app.cfg.general.fps as f32),
             )),
             None => LRESULT(0),
         },
@@ -398,6 +420,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.timer.set(app.interval_ms()); // frame rate may differ
                 save("general", "animation", name);
                 let _ = InvalidateRect(hwnd, None, BOOL(0));
+                refresh_settings();
             }
             LRESULT(0)
         }
@@ -410,28 +433,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             LRESULT(0)
         }
-        tray::WM_SET_FPS => {
-            if let (Some(app), Some(&(fps, _))) = (app_of(hwnd), anim::FRAME_RATES.get(wp.0)) {
-                app.cfg.general.fps = fps as u32;
-                app.timer.set(app.interval_ms());
-                save("general", "fps", fps as i64);
-            }
-            LRESULT(0)
-        }
-        tray::WM_SET_GLASS => {
-            if let (Some(app), Some(&(glass, _))) = (app_of(hwnd), theme::GLASS.get(wp.0)) {
-                app.cfg.theme.glass = glass;
-                app.apply_colors();
-                save("theme", "glass", decimal(glass));
-                let _ = InvalidateRect(hwnd, None, BOOL(0));
-            }
-            LRESULT(0)
-        }
         settings::WM_TWEAK => {
             if let Some(app) = app_of(hwnd) {
                 let (id, commit) = (wp.0 & 0xFF, (wp.0 >> 8) & 1 == 1);
                 app.tweak(id, lp.0 as f32 / 1000.0, commit);
                 let _ = InvalidateRect(hwnd, None, BOOL(0));
+                if id == settings::CLOCK {
+                    refresh_settings(); // toggled from the tray
+                }
             }
             LRESULT(0)
         }
@@ -439,13 +448,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             Some(app) => LRESULT((app.tweak_value(wp.0) * 1000.0).round() as isize),
             None => LRESULT(0),
         },
-        tray::WM_SET_SPEED => {
-            if let (Some(app), Some(&(speed, _))) = (app_of(hwnd), anim::SPEEDS.get(wp.0)) {
-                app.cfg.general.speed = speed;
-                save("general", "speed", decimal(speed));
-            }
-            LRESULT(0)
-        }
         tray::WM_TOGGLE_PAUSE => {
             if let Some(app) = app_of(hwnd) {
                 app.user_paused = !app.user_paused;
@@ -547,6 +549,7 @@ pub fn run() -> Result<()> {
             seed,
             last_frame: now,
             last_power_check: now,
+            last_pump: now,
             config_mtime: config::modified(),
             user_paused: false,
             auto_paused: false,
@@ -586,11 +589,12 @@ pub fn run() -> Result<()> {
             desktop::place(hwnd, parent);
 
             let tray = tray::create(hwnd)?;
+            (*app_ptr).timer.window = hwnd;
             (*app_ptr).timer.set((*app_ptr).interval_ms());
 
             // Wait for either a frame tick or window messages. A tick is delivered as the
             // WM_TIMER the window procedure already handles.
-            let timer = (*app_ptr).timer.0;
+            let timer = (*app_ptr).timer.handle;
             let mut msg = MSG::default();
             'pump: loop {
                 let wake = MsgWaitForMultipleObjectsEx(
@@ -599,6 +603,7 @@ pub fn run() -> Result<()> {
                     QS_ALLINPUT,
                     MWMO_INPUTAVAILABLE,
                 );
+                (*app_ptr).last_pump = Instant::now();
                 if wake == WAIT_OBJECT_0 {
                     SendMessageW(hwnd, WM_TIMER, WPARAM(TIMER_ID), LPARAM(0));
                 }
@@ -621,6 +626,15 @@ pub fn run() -> Result<()> {
 
         drop(Box::from_raw(app_ptr));
         result
+    }
+}
+
+/// Tell an open settings window to re-read the settings (after a change from the tray).
+fn refresh_settings() {
+    let window = settings::window();
+    if !window.is_invalid() {
+        // SAFETY: plain message post; a stale handle just fails.
+        let _ = unsafe { PostMessageW(window, settings::WM_REFRESH, WPARAM(0), LPARAM(0)) };
     }
 }
 

@@ -121,6 +121,10 @@ pub trait Animation {
     fn draw(&self, _out: &mut Vec<Shape>) {}
     /// Local time and long date, or None for no clock. Called every frame.
     fn set_clock(&mut self, _clock: Option<&[String; 2]>) {}
+    /// A box to keep clear, as (center, half-size) in px, or None: the website header's
+    /// logo. Animations that reserve space for the clock flow around it instead, without
+    /// drawing a clock; the rest ignore it.
+    fn set_keep_clear(&mut self, _area: Option<((f32, f32), (f32, f32))>) {}
 }
 
 /// (config name, menu label, menu group).

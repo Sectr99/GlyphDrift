@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Glyphdrift</title>
-  <meta name="description" content="A quiet live wallpaper for Windows and macOS: contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.">
+  <meta name="description" content="A live wallpaper for Windows and macOS: contour maps, ASCII art and geometric animations that move slowly behind your desktop icons.">
   <meta name="theme-color" content="#000000">
   <meta property="og:title" content="Glyphdrift">
-  <meta property="og:description" content="A quiet live wallpaper for Windows and macOS. One small app, no installer, no network.">
+  <meta property="og:description" content="A live wallpaper for Windows and macOS. A small app with no installer and no network access.">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -19,6 +19,7 @@
     </a>
     <nav>
       <a href="#features">Features</a>
+      <a href="#animations">Animations</a>
       <a href="#themes">Themes</a>
       <a href="#start">Get started</a>
       <a href="https://github.com/Sectr99/GlyphDrift">GitHub</a>
@@ -35,9 +36,9 @@
         <p class="wordmark">Glyphdrift</p>
       </div>
       <div class="hero-copy">
-        <h1>A quiet live wallpaper for Windows and Mac</h1>
-        <p>Contour maps, ASCII and minimal motion graphics drifting behind your desktop icons.
-          One small app. No installer, no account, no network.</p>
+        <h1>A live wallpaper for Windows and Mac</h1>
+        <p>Contour maps, ASCII art and geometric animations that move slowly behind your
+          desktop icons. It's a small app with no installer, and it never connects to the internet.</p>
         <div class="actions" id="downloads">
           <a class="button primary" data-platform="windows" href="https://github.com/Sectr99/GlyphDrift/releases/latest/download/glyphdrift.exe">Download for Windows</a>
           <a class="button" data-platform="mac" href="https://github.com/Sectr99/GlyphDrift/releases/latest/download/Glyphdrift-macos.zip">Download for Mac</a>
@@ -48,59 +49,124 @@
     </section>
 
     <section id="features" class="section">
-      <h2>Made to stay in the background</h2>
+      <h2>Features</h2>
       <div class="features">
         <article>
           <h3>Behind your icons</h3>
-          <p>Draws on the desktop itself, under your icons and windows. An optional readability veil keeps icon labels crisp.</p>
+          <p>Glyphdrift draws on the desktop, under your icons and windows. If a busy animation makes icon labels hard to read, the <em>Icon readability</em> setting fades it toward the background color.</p>
         </article>
         <article>
-          <h3>Light on resources</h3>
-          <p>Most animations use around 1% of a modern CPU. Pauses itself for fullscreen apps and battery saver (Low Power Mode on a Mac), and says so in the tray or menu bar.</p>
+          <h3>Low CPU use</h3>
+          <p>Most animations use less than 1% of an 8-thread CPU, and the contour ones 1 to 3%. It pauses while a fullscreen app is open and while battery saver or Low Power Mode is on.</p>
         </article>
         <article>
-          <h3>A clock that belongs</h3>
-          <p>Topographic drift can show the time and date in a framed box; the contour lines flow around it.</p>
+          <h3>Optional clock</h3>
+          <p>Topographic drift can show the time and date in a box in the middle of the screen, with the contour lines bending around it.</p>
         </article>
         <article>
-          <h3>Tweak it live</h3>
-          <p>Speed, scale, frame rate and theme apply as you drag. The settings window opens by the tray or menu bar icon, so the wallpaper is your preview.</p>
+          <h3>Works offline</h3>
+          <p>No account, analytics or update checks. Your settings are in a text file on your computer, which you can also edit by hand.</p>
         </article>
       </div>
     </section>
 
-    <section class="section">
+    <section id="in-use" class="section">
+      <h2>Changes show up immediately</h2>
+      <p class="lede">Drag a slider or pick a theme and the wallpaper updates while you adjust it. This is the Mac settings window, over the Cubes animation in the Mono theme.</p>
+      <figure class="shot">
+        <a class="zoom" href="img/in-use.webp" data-single
+          data-caption="Cubes in the Mono theme, with the settings window">
+          <img src="img/in-use.webp" width="2000" height="1250" loading="lazy" decoding="async"
+            alt="The Glyphdrift settings window over the Cubes animation: animation and theme menus, sliders for speed, icon readability and scale, and frame rate.">
+        </a>
+      </figure>
+    </section>
+
+    <section id="animations" class="section">
       <h2>23 animations</h2>
-      <div class="groups">
-        <div><h3>Contour</h3><p>Topographic drift · Ridgelines · Isobars · Wood grain · Interference · Hillshade topo · Dune ripples</p></div>
-        <div><h3>Fluid</h3><p>Lava lamp · Ink in water</p></div>
-        <div><h3>Loops</h3><p>Helix · Wire globe · Dot wave · Cubes · Sunburst · Moon</p></div>
-        <div><h3>ASCII</h3><p>Matrix rain · Plasma · Fire · Waves · Ripples · Wind</p></div>
-        <div><h3>Graphics</h3><p>Constellation · Flow field</p></div>
-      </div>
+      <p class="lede">Each one is shown in one of the 22 themes, but every animation works with every theme. Select an image to see it larger.</p>
+      <h3 class="group">Contour</h3>
+      <ul class="gallery">
+        <li><a class="zoom" href="img/anim-topo-2400.webp" data-srcset="img/anim-topo-1600.webp 1600w, img/anim-topo-2400.webp 2400w"><img src="img/anim-topo.webp" width="800" height="500" loading="lazy" decoding="async" alt="Topographic drift animation in the Mono theme"></a><p>Topographic drift <span>Mono</span></p></li>
+        <li><a class="zoom" href="img/anim-ridges-2400.webp" data-srcset="img/anim-ridges-1600.webp 1600w, img/anim-ridges-2400.webp 2400w"><img src="img/anim-ridges.webp" width="800" height="500" loading="lazy" decoding="async" alt="Ridgelines animation in the Everforest theme"></a><p>Ridgelines <span>Everforest</span></p></li>
+        <li><a class="zoom" href="img/anim-isobars-2400.webp" data-srcset="img/anim-isobars-1600.webp 1600w, img/anim-isobars-2400.webp 2400w"><img src="img/anim-isobars.webp" width="800" height="500" loading="lazy" decoding="async" alt="Isobars animation in the GitHub Dark theme"></a><p>Isobars <span>GitHub Dark</span></p></li>
+        <li><a class="zoom" href="img/anim-wood-2400.webp" data-srcset="img/anim-wood-1600.webp 1600w, img/anim-wood-2400.webp 2400w"><img src="img/anim-wood.webp" width="800" height="500" loading="lazy" decoding="async" alt="Wood grain animation in the Gruvbox Dark theme"></a><p>Wood grain <span>Gruvbox Dark</span></p></li>
+        <li><a class="zoom" href="img/anim-interference-2400.webp" data-srcset="img/anim-interference-1600.webp 1600w, img/anim-interference-2400.webp 2400w"><img src="img/anim-interference.webp" width="800" height="500" loading="lazy" decoding="async" alt="Interference animation in the Oxocarbon theme"></a><p>Interference <span>Oxocarbon</span></p></li>
+        <li><a class="zoom" href="img/anim-hillshade-2400.webp" data-srcset="img/anim-hillshade-1600.webp 1600w, img/anim-hillshade-2400.webp 2400w"><img src="img/anim-hillshade.webp" width="800" height="500" loading="lazy" decoding="async" alt="Hillshade topo animation in the Solarized Dark theme"></a><p>Hillshade topo <span>Solarized Dark</span></p></li>
+        <li><a class="zoom" href="img/anim-dunes-2400.webp" data-srcset="img/anim-dunes-1600.webp 1600w, img/anim-dunes-2400.webp 2400w"><img src="img/anim-dunes.webp" width="800" height="500" loading="lazy" decoding="async" alt="Dune ripples animation in the Ayu Dark theme"></a><p>Dune ripples <span>Ayu Dark</span></p></li>
+      </ul>
+      <h3 class="group">Fluid</h3>
+      <ul class="gallery">
+        <li><a class="zoom" href="img/anim-lava-2400.webp" data-srcset="img/anim-lava-1600.webp 1600w, img/anim-lava-2400.webp 2400w"><img src="img/anim-lava.webp" width="800" height="500" loading="lazy" decoding="async" alt="Lava lamp animation in the Synthwave &#x27;84 theme"></a><p>Lava lamp <span>Synthwave &#x27;84</span></p></li>
+        <li><a class="zoom" href="img/anim-ink-2400.webp" data-srcset="img/anim-ink-1600.webp 1600w, img/anim-ink-2400.webp 2400w"><img src="img/anim-ink.webp" width="800" height="500" loading="lazy" decoding="async" alt="Ink in water animation in the Poimandres theme"></a><p>Ink in water <span>Poimandres</span></p></li>
+      </ul>
+      <h3 class="group">Loops</h3>
+      <ul class="gallery">
+        <li><a class="zoom" href="img/anim-helix-2400.webp" data-srcset="img/anim-helix-1600.webp 1600w, img/anim-helix-2400.webp 2400w"><img src="img/anim-helix.webp" width="800" height="500" loading="lazy" decoding="async" alt="Helix animation in the Synthwave &#x27;84 theme"></a><p>Helix <span>Synthwave &#x27;84</span></p></li>
+        <li><a class="zoom" href="img/anim-globe-2400.webp" data-srcset="img/anim-globe-1600.webp 1600w, img/anim-globe-2400.webp 2400w"><img src="img/anim-globe.webp" width="800" height="500" loading="lazy" decoding="async" alt="Wire globe animation in the Matrix theme"></a><p>Wire globe <span>Matrix</span></p></li>
+        <li><a class="zoom" href="img/anim-dotwave-2400.webp" data-srcset="img/anim-dotwave-1600.webp 1600w, img/anim-dotwave-2400.webp 2400w"><img src="img/anim-dotwave.webp" width="800" height="500" loading="lazy" decoding="async" alt="Dot wave animation in the Kanagawa theme"></a><p>Dot wave <span>Kanagawa</span></p></li>
+        <li><a class="zoom" href="img/anim-cubes-2400.webp" data-srcset="img/anim-cubes-1600.webp 1600w, img/anim-cubes-2400.webp 2400w"><img src="img/anim-cubes.webp" width="800" height="500" loading="lazy" decoding="async" alt="Cubes animation in the Gruvbox Dark theme"></a><p>Cubes <span>Gruvbox Dark</span></p></li>
+        <li><a class="zoom" href="img/anim-sunburst-2400.webp" data-srcset="img/anim-sunburst-1600.webp 1600w, img/anim-sunburst-2400.webp 2400w"><img src="img/anim-sunburst.webp" width="800" height="500" loading="lazy" decoding="async" alt="Sunburst animation in the Claude theme"></a><p>Sunburst <span>Claude</span></p></li>
+        <li><a class="zoom" href="img/anim-moon-2400.webp" data-srcset="img/anim-moon-1600.webp 1600w, img/anim-moon-2400.webp 2400w"><img src="img/anim-moon.webp" width="800" height="500" loading="lazy" decoding="async" alt="Moon animation in the Mono theme"></a><p>Moon <span>Mono</span></p></li>
+      </ul>
+      <h3 class="group">ASCII</h3>
+      <ul class="gallery">
+        <li><a class="zoom" href="img/anim-matrix-2400.webp" data-srcset="img/anim-matrix-1600.webp 1600w, img/anim-matrix-2400.webp 2400w"><img src="img/anim-matrix.webp" width="800" height="500" loading="lazy" decoding="async" alt="Matrix rain animation in the Matrix theme"></a><p>Matrix rain <span>Matrix</span></p></li>
+        <li><a class="zoom" href="img/anim-plasma-2400.webp" data-srcset="img/anim-plasma-1600.webp 1600w, img/anim-plasma-2400.webp 2400w"><img src="img/anim-plasma.webp" width="800" height="500" loading="lazy" decoding="async" alt="Plasma animation in the Synthwave &#x27;84 theme"></a><p>Plasma <span>Synthwave &#x27;84</span></p></li>
+        <li><a class="zoom" href="img/anim-fire-2400.webp" data-srcset="img/anim-fire-1600.webp 1600w, img/anim-fire-2400.webp 2400w"><img src="img/anim-fire.webp" width="800" height="500" loading="lazy" decoding="async" alt="Fire animation in the Amber CRT theme"></a><p>Fire <span>Amber CRT</span></p></li>
+        <li><a class="zoom" href="img/anim-waves-2400.webp" data-srcset="img/anim-waves-1600.webp 1600w, img/anim-waves-2400.webp 2400w"><img src="img/anim-waves.webp" width="800" height="500" loading="lazy" decoding="async" alt="Waves animation in the Night Owl theme"></a><p>Waves <span>Night Owl</span></p></li>
+        <li><a class="zoom" href="img/anim-ripples-2400.webp" data-srcset="img/anim-ripples-1600.webp 1600w, img/anim-ripples-2400.webp 2400w"><img src="img/anim-ripples.webp" width="800" height="500" loading="lazy" decoding="async" alt="Ripples animation in the Catppuccin Mocha theme"></a><p>Ripples <span>Catppuccin Mocha</span></p></li>
+        <li><a class="zoom" href="img/anim-wind-2400.webp" data-srcset="img/anim-wind-1600.webp 1600w, img/anim-wind-2400.webp 2400w"><img src="img/anim-wind.webp" width="800" height="500" loading="lazy" decoding="async" alt="Wind animation in the Synthwave &#x27;84 theme"></a><p>Wind <span>Synthwave &#x27;84</span></p></li>
+      </ul>
+      <h3 class="group">Graphics</h3>
+      <ul class="gallery">
+        <li><a class="zoom" href="img/anim-constellation-2400.webp" data-srcset="img/anim-constellation-1600.webp 1600w, img/anim-constellation-2400.webp 2400w"><img src="img/anim-constellation.webp" width="800" height="500" loading="lazy" decoding="async" alt="Constellation animation in the Night Owl theme"></a><p>Constellation <span>Night Owl</span></p></li>
+        <li><a class="zoom" href="img/anim-flow-2400.webp" data-srcset="img/anim-flow-1600.webp 1600w, img/anim-flow-2400.webp 2400w"><img src="img/anim-flow.webp" width="800" height="500" loading="lazy" decoding="async" alt="Flow field animation in the Poimandres theme"></a><p>Flow field <span>Poimandres</span></p></li>
+      </ul>
     </section>
 
     <section id="themes" class="section">
-      <h2>Themes you already use</h2>
-      <p class="lede">The palettes of popular editor themes, plus a few terminal classics. Pick one to recolor the header.</p>
+      <h2>22 color themes</h2>
+      <p class="lede">Palettes from popular code editor themes, plus a few classic terminal colors. Pick one to recolor the animation at the top of this page.</p>
       <div id="swatches" class="swatches"></div>
     </section>
 
     <section id="start" class="section">
       <h2>Get started</h2>
+      <!-- Shown by main.js; without it, both platforms' steps show. -->
+      <div class="platforms" role="group" aria-label="Show steps for" hidden>
+        <button type="button" data-show="windows" aria-pressed="true">Windows</button>
+        <button type="button" data-show="mac" aria-pressed="false">Mac</button>
+      </div>
       <ol class="steps">
         <li><span>1</span><div><h3>Download</h3>
-          <p><strong>Windows:</strong> grab <code>glyphdrift.exe</code> from the latest release. There is nothing to install.</p>
-          <p><strong>Mac:</strong> grab <code>Glyphdrift-macos.zip</code>, open it and move <em>Glyphdrift</em> to Applications.</p></div></li>
+          <p data-platform="windows"><strong>Windows:</strong> download <code>glyphdrift.exe</code>. There's nothing to install.</p>
+          <p data-platform="mac"><strong>Mac:</strong> download <code>Glyphdrift-macos.zip</code>, open it, and move <em>Glyphdrift</em> to your Applications folder.</p></div></li>
         <li><span>2</span><div><h3>Run it</h3>
-          <p>The wallpaper starts behind your icons, and an icon appears in the tray or menu bar.</p>
-          <p><strong>Windows</strong> may warn about an unrecognized app: choose <em>More info</em>, then <em>Run anyway</em>.</p>
-          <p><strong>macOS</strong> blocks the first launch because the app isn't notarized yet: open <em>System Settings</em> › <em>Privacy &amp; Security</em>, scroll down and click <em>Open Anyway</em>.</p></div></li>
-        <li><span>3</span><div><h3>Make it yours</h3>
-          <p><strong>Windows:</strong> left-click the tray icon for settings. Turn on <em>Start with Windows</em> from the right-click menu to keep it.</p>
-          <p><strong>Mac:</strong> click the menu bar icon for settings and quick options. Turn on <em>Open at Login</em> to keep it.</p></div></li>
+          <p>The animation starts behind your desktop icons, and the Glyphdrift icon appears in the tray on Windows or the menu bar on a Mac.</p>
+          <p data-platform="windows"><strong>Windows</strong> may warn that it doesn't recognize the app. Choose <em>More info</em>, then <em>Run anyway</em>.</p>
+          <p data-platform="mac"><strong>macOS</strong> blocks the first launch because the app isn't notarized yet. Open <em>System Settings</em> › <em>Privacy &amp; Security</em>, scroll down and click <em>Open Anyway</em>.</p></div></li>
+        <li><span>3</span><div><h3>Choose your settings</h3>
+          <p data-platform="windows"><strong>Windows:</strong> left-click the tray icon to open Settings. To start Glyphdrift when you sign in, right-click the icon and turn on <em>Start with Windows</em>.</p>
+          <p data-platform="mac"><strong>Mac:</strong> click the menu bar icon for Settings and quick options. Turn on <em>Open at Login</em> to start Glyphdrift when you log in.</p></div></li>
       </ol>
     </section>
+    <!-- Larger image viewer, opened from the screenshots (main.js). -->
+    <dialog id="viewer" class="viewer" aria-labelledby="viewer-caption" tabindex="-1">
+      <figure>
+        <div class="viewer-frame"><img alt="" decoding="async"></div>
+        <figcaption id="viewer-caption"></figcaption>
+      </figure>
+      <button class="viewer-button viewer-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <button class="viewer-button viewer-prev" type="button" aria-label="Previous animation">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <button class="viewer-button viewer-next" type="button" aria-label="Next animation">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+      </button>
+    </dialog>
   </main>
 
   <footer class="footer">

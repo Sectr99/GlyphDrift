@@ -231,6 +231,105 @@ if (isMac) {
   downloads.insertBefore(mac, windows);
 }
 
+// ---------------------------------------------------------------------------------------
+// Navigation: tinted once the page scrolls past the top.
+
+const nav = document.querySelector(".nav");
+const tintNav = () => nav.classList.toggle("scrolled", window.scrollY > 24);
+window.addEventListener("scroll", tintNav, { passive: true });
+tintNav();
+
+// ---------------------------------------------------------------------------------------
+// Get started: one platform's steps at a time, starting with the visitor's.
+
+const platforms = document.querySelector(".platforms");
+function showPlatform(name) {
+  for (const el of document.querySelectorAll(".steps [data-platform]")) el.hidden = el.dataset.platform !== name;
+  for (const b of platforms.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.show === name));
+}
+for (const b of platforms.querySelectorAll("button")) b.addEventListener("click", () => showPlatform(b.dataset.show));
+platforms.hidden = false;
+showPlatform(isMac ? "mac" : "windows");
+
+// ---------------------------------------------------------------------------------------
+// Viewer: a larger image in a dialog. Gallery images step with the buttons, arrow keys or
+// a swipe; the "in use" image opens on its own. Without JavaScript the links open the image.
+
+const viewer = document.getElementById("viewer");
+const frameBox = viewer.querySelector(".viewer-frame");
+const big = frameBox.querySelector("img");
+const caption = viewer.querySelector("figcaption");
+const prev = viewer.querySelector(".viewer-prev");
+const next = viewer.querySelector(".viewer-next");
+const gallery = [...document.querySelectorAll(".gallery .zoom")];
+let shown = null; // the link being viewed
+let opener = null; // where focus goes back to
+
+function show(link) {
+  shown = link;
+  const thumb = link.querySelector("img");
+  big.classList.remove("loaded");
+  frameBox.style.backgroundImage = `url("${thumb.currentSrc || thumb.src}")`;
+  big.alt = thumb.alt;
+  big.removeAttribute("srcset");
+  if (link.dataset.srcset) {
+    big.sizes = "(max-width: 640px) 100vw, 92vw";
+    big.srcset = link.dataset.srcset;
+  }
+  big.src = link.href;
+  const card = link.closest("li");
+  if (card) {
+    caption.replaceChildren(...[...card.querySelector("p").childNodes].map((n) => n.cloneNode(true)));
+  } else {
+    caption.textContent = link.dataset.caption || "";
+  }
+  const single = !gallery.includes(link);
+  prev.hidden = next.hidden = single;
+}
+
+function step(by) {
+  const i = gallery.indexOf(shown);
+  if (i < 0) return;
+  show(gallery[(i + by + gallery.length) % gallery.length]);
+}
+
+big.addEventListener("load", () => big.classList.add("loaded"));
+for (const link of document.querySelectorAll(".zoom")) {
+  link.addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; // new tab etc.
+    e.preventDefault();
+    opener = link;
+    show(link);
+    viewer.showModal();
+    viewer.focus(); // the dialog, not its first button: no focus ring on a tap
+  });
+}
+prev.addEventListener("click", () => step(-1));
+next.addEventListener("click", () => step(1));
+viewer.querySelector(".viewer-close").addEventListener("click", () => viewer.close());
+// A click outside the image and buttons closes it.
+viewer.addEventListener("click", (e) => {
+  if (e.target === viewer || e.target.tagName === "FIGURE") viewer.close();
+});
+viewer.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft") step(-1);
+  if (e.key === "ArrowRight") step(1);
+});
+viewer.addEventListener("close", () => {
+  big.removeAttribute("src");
+  big.removeAttribute("srcset");
+  opener?.focus();
+});
+// Swipe left or right on touch screens.
+let touchX = null;
+viewer.addEventListener("touchstart", (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+viewer.addEventListener("touchend", (e) => {
+  if (touchX === null) return;
+  const dx = e.changedTouches[0].clientX - touchX;
+  touchX = null;
+  if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
+});
+
 let saved = null;
 try { saved = localStorage.getItem("glyphdrift-theme"); } catch { /* storage unavailable */ }
 resize();

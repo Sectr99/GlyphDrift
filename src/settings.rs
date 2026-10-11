@@ -89,7 +89,7 @@ fn hint(id: usize) -> &'static str {
             "Size of the centered shape in the Loops animations, on top of the overall scale."
         }
         FPS => {
-            "Auto uses each animation's own rate (24 or 30 fps). Higher is smoother but uses \
+            "Auto uses each animation's own rate (20 to 30 fps). Higher is smoother but uses \
              more CPU."
         }
         CLOCK => {

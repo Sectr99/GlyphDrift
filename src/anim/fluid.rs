@@ -3,7 +3,7 @@
 
 use std::f32::consts::TAU;
 
-use super::contour::{fbm3, Field};
+use super::contour::{fbm3, Field, MIN_CELL};
 use super::loops::{Pen, HAIR, MID};
 use super::rng::hash3;
 use super::{Animation, Size};
@@ -65,7 +65,7 @@ impl Animation for LavaLamp {
         true
     }
     fn fps(&self) -> u32 {
-        30
+        20 // slow drift; drawing is the expensive part, so fewer frames save the most
     }
     fn init(&mut self, size: Size, seed: u64) {
         (self.w, self.h, self.unit) = (size.width, size.height, size.focus.unit().max(1.0));
@@ -84,8 +84,9 @@ impl Animation for LavaLamp {
                 .map(|&(bx, by, r)| r * r / ((x - bx).powi(2) + (y - by).powi(2) + 1.0))
                 .sum::<f32>()
         };
-        // Glowing core: halftone dots that grow toward the center of each mass.
-        let step = pen.px(10.0);
+        // Glowing core: halftone dots that grow toward the center of each mass. Each dot is
+        // a draw call, so the spacing has the same floor as contour grids.
+        let step = pen.px(10.0).max(MIN_CELL);
         let (nx, ny) = (
             (self.w / step) as i32 + 1,
             (self.h / (step * 0.866)) as i32 + 1,
@@ -108,7 +109,7 @@ impl Animation for LavaLamp {
             }
         }
         // Edge and halo contours.
-        let grid = Field::sample(self.w, self.h, pen.px(9.0), field);
+        let grid = Field::sample(self.w, self.h, pen.px(9.0).max(MIN_CELL), field);
         for (level, weight, brightness) in [(1.0, MID, 210), (0.62, HAIR, 70)] {
             grid.contour(level, |a, b| {
                 out.push(Shape::Line {
@@ -172,7 +173,7 @@ impl Animation for Topographic {
         "topo"
     }
     fn fps(&self) -> u32 {
-        30
+        20 // slow drift; drawing is the expensive part, so fewer frames save the most
     }
     fn init(&mut self, size: Size, seed: u64) {
         let f = size.focus;
@@ -198,25 +199,33 @@ impl Animation for Topographic {
         let height = |x: f32, y: f32| fbm3(x * scale + drift, y * scale, morph);
         let (cx, cy) = self.center;
         let inside = height(cx, cy); // flat inside the box: no lines cross it
-        let grid = Field::sample(self.w, self.h, pen.px(12.0), |x, y| match self.warp(x, y) {
-            Some((x, y)) => height(x, y),
-            None => inside,
-        });
-        for k in -LEVELS..=LEVELS {
-            let level = k as f32 / LEVELS as f32 * 0.8;
-            let index = k % 5 == 0; // heavier index contour
-            let height = (level / 0.8 + 1.0) / 2.0; // 0 low .. 1 high
-            let brightness =
-                (40.0 + 150.0 * height + if index { 40.0 } else { 0.0 }).min(255.0) as u8;
-            let weight = if index { MID } else { HAIR };
-            grid.contour(level, |a, b| {
-                out.push(Shape::Line {
-                    a,
-                    b,
-                    width: pen.px(weight),
-                    level: brightness,
-                });
-            });
+        let grid = Field::sample(
+            self.w,
+            self.h,
+            pen.px(12.0).max(MIN_CELL),
+            |x, y| match self.warp(x, y) {
+                Some((x, y)) => height(x, y),
+                None => inside,
+            },
+        );
+        // (level, width, brightness) per contour, lowest first.
+        let styles: Vec<(f32, f32, u8)> = (-LEVELS..=LEVELS)
+            .map(|k| {
+                let level = k as f32 / LEVELS as f32 * 0.8;
+                let index = k % 5 == 0; // heavier index contour
+                let height = (level / 0.8 + 1.0) / 2.0; // 0 low .. 1 high
+                let brightness =
+                    (40.0 + 150.0 * height + if index { 40.0 } else { 0.0 }).min(255.0) as u8;
+                (level, pen.px(if index { MID } else { HAIR }), brightness)
+            })
+            .collect();
+        let levels: Vec<f32> = styles.iter().map(|s| s.0).collect();
+        for (segments, &(_, width, level)) in grid.segments_by_level(&levels).iter().zip(&styles) {
+            out.extend(
+                segments
+                    .iter()
+                    .map(|&(a, b)| Shape::Line { a, b, width, level }),
+            );
         }
         if let Some([time, date]) = &self.clock {
             let (hw, hh) = self.half;
@@ -298,9 +307,20 @@ impl Ink {
     fn sample(&self, f: &[f32], x: f32, y: f32) -> f32 {
         let (x0, y0) = (x.floor(), y.floor());
         let (fx, fy) = (x - x0, y - y0);
-        let (i, j) = (x0 as isize, y0 as isize);
-        let a = f[self.idx(i, j)] + (f[self.idx(i + 1, j)] - f[self.idx(i, j)]) * fx;
-        let b = f[self.idx(i, j + 1)] + (f[self.idx(i + 1, j + 1)] - f[self.idx(i, j + 1)]) * fx;
+        // Wrap once per axis (division is the expensive part), then step to the neighbor.
+        let i0 = (x0 as isize).rem_euclid(self.w as isize) as usize;
+        let j0 = (y0 as isize).rem_euclid(self.h as isize) as usize;
+        let i1 = if i0 + 1 == self.w { 0 } else { i0 + 1 };
+        let (r0, r1) = (
+            j0 * self.w,
+            if j0 + 1 == self.h {
+                0
+            } else {
+                (j0 + 1) * self.w
+            },
+        );
+        let a = f[r0 + i0] + (f[r0 + i1] - f[r0 + i0]) * fx;
+        let b = f[r1 + i0] + (f[r1 + i1] - f[r1 + i0]) * fx;
         a + (b - a) * fy
     }
 
@@ -320,39 +340,45 @@ impl Ink {
 
     /// Make the velocity divergence-free (incompressible), Jacobi-solving for pressure.
     fn project(&mut self) {
-        let n = self.w * self.h;
+        let (w, h) = (self.w, self.h);
+        let n = w * h;
         let [div, p, tmp] = &mut self.scratch;
         div.resize(n, 0.0);
         p.clear();
         p.resize(n, 0.0);
         tmp.resize(n, 0.0);
-        let (w, h) = (self.w as isize, self.h as isize);
-        let at = |i: isize, j: isize| (j.rem_euclid(h) * w + i.rem_euclid(w)) as usize;
+        // Wrapped neighbors, worked out once: left/right columns and up/down row offsets.
+        let left: Vec<usize> = (0..w).map(|i| (i + w - 1) % w).collect();
+        let right: Vec<usize> = (0..w).map(|i| (i + 1) % w).collect();
+        let up: Vec<usize> = (0..h).map(|j| (j + h - 1) % h * w).collect();
+        let down: Vec<usize> = (0..h).map(|j| (j + 1) % h * w).collect();
         for j in 0..h {
+            let r = j * w;
             for i in 0..w {
-                div[at(i, j)] = -0.5
-                    * (self.u[at(i + 1, j)] - self.u[at(i - 1, j)] + self.v[at(i, j + 1)]
-                        - self.v[at(i, j - 1)]);
+                div[r + i] = -0.5
+                    * (self.u[r + right[i]] - self.u[r + left[i]] + self.v[down[j] + i]
+                        - self.v[up[j] + i]);
             }
         }
         for _ in 0..JACOBI {
             for j in 0..h {
+                let r = j * w;
                 for i in 0..w {
-                    tmp[at(i, j)] = (div[at(i, j)]
-                        + p[at(i - 1, j)]
-                        + p[at(i + 1, j)]
-                        + p[at(i, j - 1)]
-                        + p[at(i, j + 1)])
+                    tmp[r + i] = (div[r + i]
+                        + p[r + left[i]]
+                        + p[r + right[i]]
+                        + p[up[j] + i]
+                        + p[down[j] + i])
                         / 4.0;
                 }
             }
             std::mem::swap(p, tmp);
         }
         for j in 0..h {
+            let r = j * w;
             for i in 0..w {
-                let k = at(i, j);
-                self.u[k] -= 0.5 * (p[at(i + 1, j)] - p[at(i - 1, j)]);
-                self.v[k] -= 0.5 * (p[at(i, j + 1)] - p[at(i, j - 1)]);
+                self.u[r + i] -= 0.5 * (p[r + right[i]] - p[r + left[i]]);
+                self.v[r + i] -= 0.5 * (p[down[j] + i] - p[up[j] + i]);
             }
         }
     }
@@ -410,6 +436,9 @@ impl Ink {
 impl Animation for Ink {
     fn name(&self) -> &'static str {
         "ink"
+    }
+    fn fps(&self) -> u32 {
+        20 // the simulation steps at a fixed 30 per second regardless
     }
 
     fn init(&mut self, size: Size, seed: u64) {

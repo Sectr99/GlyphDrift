@@ -1,0 +1,12 @@
+[package]
+name = "glyphdrift-web"
+version = "0.1.0"
+edition = "2021"
+description = "The Glyphdrift animations as WebAssembly, for the website's live previews"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+glyphdrift = { path = ".." }

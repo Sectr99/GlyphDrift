@@ -31,6 +31,9 @@ pub struct General {
     pub clock: bool,
     /// macOS: stop below the menu bar and set the desktop picture to the theme background.
     pub match_menu_bar: bool,
+    /// macOS: set the desktop picture to a still frame of the animation, which the lock
+    /// screen shows.
+    pub lock_screen: bool,
     pub pause_on_fullscreen: bool,
     pub pause_on_battery_saver: bool,
 }
@@ -70,6 +73,7 @@ impl Default for General {
             object_scale: 1.0,
             clock: false,
             match_menu_bar: false,
+            lock_screen: true, // only takes effect on macOS
             pause_on_fullscreen: true,
             pause_on_battery_saver: true,
         }

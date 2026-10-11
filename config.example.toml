@@ -14,6 +14,8 @@ object_scale = 1.0            # extra scale for centered objects, 0.5..=2.0
 clock = false                 # time and date in Topographic drift; the contours flow around it
 match_menu_bar = false        # macOS: keep the menu bar clear, on the theme's background color
                               # (sets the desktop picture while on; yours comes back when off)
+lock_screen = true            # macOS: show a still frame of the animation on the lock screen
+                              # (sets the desktop picture while on; yours comes back when off)
 pause_on_fullscreen = true    # macOS: while a screen is fully covered
 pause_on_battery_saver = true # macOS: Low Power Mode
 # Edits to this file apply within a second; no restart needed.

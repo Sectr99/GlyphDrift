@@ -1,10 +1,13 @@
-//! Match menu bar to theme. macOS backs the menu bar with a pale frosted strip wherever a
-//! window lies under it, wallpaper windows included; over the desktop picture it stays
-//! clear. While on, the wallpaper windows stop at the menu bar (see `desktop::create`) and
-//! each screen's picture is a solid image in the theme's background color, so the menu bar
-//! sits on the theme's background. The
-//! user's pictures are recorded first, in a file next to the config, and restored when the
-//! option is turned off or the app quits, or on the next launch after a crash.
+//! The desktop picture, for two settings:
+//! - Match menu bar to theme. macOS backs the menu bar with a pale frosted strip wherever a
+//!   window lies under it, wallpaper windows included; over the desktop picture it stays
+//!   clear. While on, the wallpaper windows stop at the menu bar (see `desktop::create`)
+//!   and each screen's picture is a solid image in the theme's background color.
+//! - Show on lock screen. The lock screen shows the desktop picture, not app windows, so
+//!   the picture becomes a still frame of the animation (drawn by the app, see `mod.rs`).
+//!
+//! The user's pictures are recorded first, in a file next to the config, and restored when
+//! both settings are off or the app quits, or on the next launch after a crash.
 //!
 //! macOS keeps a picture per Space and only the current one can be set: other Spaces catch
 //! up within a second of being visited, and a quit restores the current Space's screens.
@@ -24,8 +27,26 @@ use crate::config::{self, Rgb};
 
 /// Recorded pictures, one line per screen: name, scaling, clipping, path (tab-separated).
 const STATE: &str = "desktop-pictures.txt";
-/// Our solid pictures are `menu-bar-RRGGBB.png`; a new name per color makes macOS reload.
-const PREFIX: &str = "menu-bar-";
+/// Our pictures: solid `menu-bar-RRGGBB.png` and lock screen frames `lock-screen-*.png`. A
+/// new name per change makes macOS reload; the prefixes tell ours from the user's.
+const PREFIXES: [&str; 2] = ["menu-bar-", "lock-screen-"];
+
+/// True for a picture this app wrote: in its folder, with one of its prefixes.
+fn is_ours(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    path.parent().is_some_and(|p| Some(p) == dir().as_deref())
+        && path
+            .file_name()
+            .is_some_and(|n| PREFIXES.iter().any(|p| n.to_string_lossy().starts_with(p)))
+}
+
+/// A new lock screen frame's path for screen `index`.
+pub fn frame_path(index: usize) -> Option<PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    Some(dir()?.join(format!("{}{index}-{stamp}.png", PREFIXES[1])))
+}
 
 /// A screen's own picture, to restore.
 struct Original {
@@ -112,6 +133,51 @@ fn write_solid(path: &PathBuf, c: Rgb) -> Result<(), String> {
     std::fs::write(path, png.to_vec()).map_err(|e| format!("{e}"))
 }
 
+/// `frame` (`size` points minus the menu bar, at `scale`) on a `size` image, under a strip of
+/// `bg` where the menu bar is: for when the wallpaper windows stop below the menu bar.
+pub fn with_menu_bar_strip(
+    frame: &NSBitmapImageRep,
+    size: (f64, f64),
+    scale: f64,
+    bg: Rgb,
+) -> Option<objc2::rc::Retained<NSBitmapImageRep>> {
+    // SAFETY: null planes make the rep allocate its own buffer.
+    let out = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            std::ptr::null_mut(),
+            (size.0 * scale).round() as isize,
+            (size.1 * scale).round() as isize,
+            8,
+            4,
+            true,
+            false,
+            NSDeviceRGBColorSpace,
+            0,
+            0,
+        )
+    }?;
+    out.setSize(objc2_foundation::NSSize::new(size.0, size.1));
+    let ctx = objc2_app_kit::NSGraphicsContext::graphicsContextWithBitmapImageRep(&out)?;
+    let previous = objc2_app_kit::NSGraphicsContext::currentContext();
+    objc2_app_kit::NSGraphicsContext::setCurrentContext(Some(&ctx));
+    let full = objc2_foundation::NSRect::new(
+        objc2_foundation::NSPoint::ZERO,
+        objc2_foundation::NSSize::new(size.0, size.1),
+    );
+    super::desktop::color(bg).setFill();
+    objc2_app_kit::NSRectFill(full);
+    // AppKit is y-up: the frame fills the bottom, leaving the strip at the top.
+    let fh = frame.size().height;
+    frame.drawInRect(objc2_foundation::NSRect::new(
+        objc2_foundation::NSPoint::ZERO,
+        objc2_foundation::NSSize::new(size.0, fh),
+    ));
+    ctx.flushGraphics();
+    objc2_app_kit::NSGraphicsContext::setCurrentContext(previous.as_deref());
+    Some(out)
+}
+
 impl DesktopPicture {
     /// The recorded pictures, if a previous run left some (on, or crashed).
     pub fn load() -> Self {
@@ -160,52 +226,55 @@ impl DesktopPicture {
             })
             .collect();
         if let Err(e) = std::fs::write(path, text) {
-            log!("menu bar: could not record desktop pictures: {e}");
+            log!("desktop picture: could not record the user's pictures: {e}");
         }
     }
 
     /// Our pictures other than `keep`.
-    fn remove_stale(keep: Option<&PathBuf>) {
+    fn remove_stale(keep: &[PathBuf]) {
         let Some(Ok(entries)) = dir().map(std::fs::read_dir) else {
             return;
         };
         for e in entries.flatten() {
             let p = e.path();
-            let ours = p
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with(PREFIX));
-            if ours && Some(&p) != keep {
+            if is_ours(&p.to_string_lossy()) && !keep.contains(&p) {
                 let _ = std::fs::remove_file(p);
             }
         }
     }
 
-    /// Show `bg` on every screen of the current Space, first recording any picture that
-    /// isn't ours (the user's, or one they just picked). Cheap when nothing changed.
-    pub fn apply(&mut self, mtm: MainThreadMarker, bg: Rgb) {
+    /// Show `bg` on every screen: a small solid image, stretched.
+    pub fn solid(&mut self, mtm: MainThreadMarker, bg: Rgb) {
         let Some(dir) = dir() else {
             return;
         };
-        let file = dir.join(format!("{PREFIX}{:02x}{:02x}{:02x}.png", bg.0, bg.1, bg.2));
-        let ours_prefix = dir.join(PREFIX).to_string_lossy().into_owned();
-        let screens = NSScreen::screens(mtm);
-        let target = file.to_string_lossy().into_owned();
-        let stale: Vec<_> = screens
-            .iter()
-            .filter(|s| current(s).as_deref() != Some(target.as_str()))
-            .collect();
-        if stale.is_empty() {
-            return;
-        }
+        let file = dir.join(format!(
+            "{}{:02x}{:02x}{:02x}.png",
+            PREFIXES[0], bg.0, bg.1, bg.2
+        ));
         if !file.exists() {
             if let Err(e) = write_solid(&file, bg) {
-                log!("menu bar: {e}");
+                log!("desktop picture: {e}");
                 return;
             }
         }
-        for screen in stale {
+        let n = NSScreen::screens(mtm).len();
+        self.show(mtm, &vec![file; n], bg);
+    }
+
+    /// Show `files[i]` on screen `i` of the current Space (images already written), first
+    /// recording any picture that isn't ours (the user's, or one they just picked). `bg`
+    /// fills any margin. Cheap when nothing changed.
+    pub fn show(&mut self, mtm: MainThreadMarker, files: &[PathBuf], bg: Rgb) {
+        let screens = NSScreen::screens(mtm);
+        for (screen, file) in screens.iter().zip(files) {
+            let target = file.to_string_lossy().into_owned();
+            let now = current(&screen);
+            if now.as_deref() == Some(target.as_str()) {
+                continue;
+            }
             let name = screen.localizedName().to_string();
-            if let Some(path) = current(&screen).filter(|p| !p.starts_with(&ours_prefix)) {
+            if let Some(path) = now.filter(|p| !is_ours(p)) {
                 let options = NSWorkspace::sharedWorkspace().desktopImageOptionsForScreen(&screen);
                 let number = |key| {
                     options
@@ -231,10 +300,10 @@ impl DesktopPicture {
             }
             let independent = NSImageScaling::ScaleAxesIndependently.0 as isize;
             if let Err(e) = set(&screen, &target, independent, true, Some(bg)) {
-                log!("menu bar: could not set the desktop picture: {e}");
+                log!("desktop picture: could not set it: {e}");
             }
         }
-        Self::remove_stale(Some(&file));
+        Self::remove_stale(files);
     }
 
     /// Give each connected screen its own picture back. Screens that aren't connected
@@ -250,7 +319,7 @@ impl DesktopPicture {
                 return true;
             };
             if let Err(e) = set(&screen, &o.path, o.scaling, o.clipping, None) {
-                log!("menu bar: could not restore the desktop picture: {e}");
+                log!("desktop picture: could not restore it: {e}");
             }
             false
         });
@@ -258,7 +327,7 @@ impl DesktopPicture {
             self.save();
         }
         if self.originals.is_empty() {
-            Self::remove_stale(None);
+            Self::remove_stale(&[]);
         }
     }
 }

@@ -1,30 +1,30 @@
 // Glyphdrift landing page: a live port of the app's Topographic drift (contour lines of
 // drifting value noise, warped around the logo box) and the theme picker.
 
-// [label, background, [dim, mid, bright]] — the cool gradients from src/theme.rs.
+// [label, background, [dim, mid, bright], config name] — the cool gradients from src/theme.rs.
 const THEMES = [
-  ["Matrix", "#000000", ["#005522", "#00aa44", "#00ff66"]],
-  ["Mono", "#000000", ["#3c3c3c", "#9a9a9a", "#ffffff"]],
-  ["Amber CRT", "#0a0600", ["#5a3200", "#c77800", "#ffb000"]],
-  ["Catppuccin Mocha", "#1e1e2e", ["#89b4fa", "#74c7ec", "#89dceb"]],
-  ["Tokyo Night", "#1a1b26", ["#7aa2f7", "#7dcfff", "#c0caf5"]],
-  ["Nord", "#2e3440", ["#5e81ac", "#81a1c1", "#88c0d0"]],
-  ["Gruvbox Dark", "#282828", ["#458588", "#83a598", "#8ec07c"]],
-  ["Dracula", "#282a36", ["#6272a4", "#bd93f9", "#8be9fd"]],
-  ["Rosé Pine", "#191724", ["#31748f", "#9ccfd8", "#e0def4"]],
-  ["Kanagawa", "#1f1f28", ["#7e9cd8", "#7fb4ca", "#dcd7ba"]],
-  ["One Dark", "#282c34", ["#c678dd", "#61afef", "#56b6c2"]],
-  ["Solarized Dark", "#002b36", ["#268bd2", "#2aa198", "#93a1a1"]],
-  ["Everforest", "#2d353b", ["#7fbbb3", "#83c092", "#d3c6aa"]],
-  ["Monokai", "#272822", ["#ae81ff", "#66d9ef", "#a6e22e"]],
-  ["Ayu Dark", "#0b0e14", ["#39bae6", "#95e6cb", "#bfbdb6"]],
-  ["Night Owl", "#011627", ["#82aaff", "#7fdbca", "#d6deeb"]],
-  ["Palenight", "#292d3e", ["#c792ea", "#82aaff", "#89ddff"]],
-  ["GitHub Dark", "#0d1117", ["#58a6ff", "#79c0ff", "#c9d1d9"]],
-  ["Oxocarbon", "#161616", ["#78a9ff", "#33b1ff", "#3ddbd9"]],
-  ["Poimandres", "#1b1e28", ["#5de4c7", "#89ddff", "#add7ff"]],
-  ["Synthwave '84", "#262335", ["#b893ce", "#ff7edb", "#36f9f6"]],
-  ["Claude", "#262624", ["#cc785c", "#d97757", "#f0efea"]],
+  ["Matrix", "#000000", ["#005522", "#00aa44", "#00ff66"], "matrix"],
+  ["Mono", "#000000", ["#3c3c3c", "#9a9a9a", "#ffffff"], "mono"],
+  ["Amber CRT", "#0a0600", ["#5a3200", "#c77800", "#ffb000"], "amber"],
+  ["Catppuccin Mocha", "#1e1e2e", ["#89b4fa", "#74c7ec", "#89dceb"], "catppuccin-mocha"],
+  ["Tokyo Night", "#1a1b26", ["#7aa2f7", "#7dcfff", "#c0caf5"], "tokyo-night"],
+  ["Nord", "#2e3440", ["#5e81ac", "#81a1c1", "#88c0d0"], "nord"],
+  ["Gruvbox Dark", "#282828", ["#458588", "#83a598", "#8ec07c"], "gruvbox"],
+  ["Dracula", "#282a36", ["#6272a4", "#bd93f9", "#8be9fd"], "dracula"],
+  ["Rosé Pine", "#191724", ["#31748f", "#9ccfd8", "#e0def4"], "rose-pine"],
+  ["Kanagawa", "#1f1f28", ["#7e9cd8", "#7fb4ca", "#dcd7ba"], "kanagawa"],
+  ["One Dark", "#282c34", ["#c678dd", "#61afef", "#56b6c2"], "one-dark"],
+  ["Solarized Dark", "#002b36", ["#268bd2", "#2aa198", "#93a1a1"], "solarized-dark"],
+  ["Everforest", "#2d353b", ["#7fbbb3", "#83c092", "#d3c6aa"], "everforest"],
+  ["Monokai", "#272822", ["#ae81ff", "#66d9ef", "#a6e22e"], "monokai"],
+  ["Ayu Dark", "#0b0e14", ["#39bae6", "#95e6cb", "#bfbdb6"], "ayu-dark"],
+  ["Night Owl", "#011627", ["#82aaff", "#7fdbca", "#d6deeb"], "night-owl"],
+  ["Palenight", "#292d3e", ["#c792ea", "#82aaff", "#89ddff"], "palenight"],
+  ["GitHub Dark", "#0d1117", ["#58a6ff", "#79c0ff", "#c9d1d9"], "github-dark"],
+  ["Oxocarbon", "#161616", ["#78a9ff", "#33b1ff", "#3ddbd9"], "oxocarbon"],
+  ["Poimandres", "#1b1e28", ["#5de4c7", "#89ddff", "#add7ff"], "poimandres"],
+  ["Synthwave '84", "#262335", ["#b893ce", "#ff7edb", "#36f9f6"], "synthwave-84"],
+  ["Claude", "#262624", ["#cc785c", "#d97757", "#f0efea"], "claude"],
 ];
 const DEFAULT_THEME = "Mono";
 
@@ -202,6 +202,7 @@ function applyTheme(t, save) {
     try { localStorage.setItem("glyphdrift-theme", t[0]); } catch { /* storage unavailable */ }
   }
   draw(performance.now());
+  recolorLive();
 }
 
 for (const t of THEMES) {
@@ -285,6 +286,7 @@ function show(link) {
   }
   const single = !gallery.includes(link);
   prev.hidden = next.hidden = single;
+  showLive(link);
 }
 
 function step(by) {
@@ -316,6 +318,7 @@ viewer.addEventListener("keydown", (e) => {
   if (e.key === "ArrowRight") step(1);
 });
 viewer.addEventListener("close", () => {
+  stopLive();
   big.removeAttribute("src");
   big.removeAttribute("srcset");
   opener?.focus();
@@ -329,6 +332,106 @@ viewer.addEventListener("touchend", (e) => {
   touchX = null;
   if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
 });
+
+// ---------------------------------------------------------------------------------------
+// Live previews: the real animations (live.js, WebAssembly), drawn in the theme picked on
+// this page. Cards show a still frame and move while hovered or keyboard-focused; the
+// viewer moves while open. With reduced motion they stay still; without WebAssembly the
+// screenshots stay.
+
+let live = null; // { Live, player } once loaded
+let viewerLive = null;
+const viewerCanvas = document.createElement("canvas");
+viewerCanvas.className = "live";
+viewerCanvas.setAttribute("aria-hidden", "true");
+frameBox.append(viewerCanvas);
+
+/// Preview speed, as the app's Speed setting: calmer than the default for a page full of them.
+const LIVE_SPEED = 0.5;
+
+/** The scene each screenshot shows: 1200 x 750 px, with its card's scale settings. */
+function liveOptions(link) {
+  const d = link.dataset;
+  return {
+    anim: d.anim, theme: theme[3], width: 1200, height: 750,
+    zoom: Number(d.zoom), objectZoom: Number(d.objectZoom), clock: d.anim === "topo",
+    speed: LIVE_SPEED,
+  };
+}
+
+/** Replace a card's screenshot with a frame drawn in the current theme. */
+function showCard(link) {
+  if (!live || link.live) return;
+  const canvas = document.createElement("canvas");
+  canvas.className = "live";
+  canvas.setAttribute("aria-hidden", "true");
+  link.append(canvas);
+  link.live = new live.Live(canvas, liveOptions(link));
+  link.live.draw();
+  canvas.classList.add("on");
+}
+
+function play(link) {
+  if (!live || reduceMotion) return;
+  showCard(link);
+  live.player.start(link.live);
+}
+
+function pause(link) {
+  if (link.live) live.player.stop(link.live);
+}
+
+for (const link of gallery) {
+  link.addEventListener("pointerenter", (e) => { if (e.pointerType !== "touch") play(link); });
+  link.addEventListener("pointerleave", () => pause(link));
+  // Keyboard focus only: focus returning from the viewer after a click shouldn't play.
+  link.addEventListener("focus", () => { if (link.matches(":focus-visible")) play(link); });
+  link.addEventListener("blur", () => pause(link));
+}
+
+function showLive(link) {
+  stopLive();
+  for (const card of gallery) pause(card);
+  if (!live || !link.dataset.anim) return;
+  viewerLive = new live.Live(viewerCanvas, liveOptions(link));
+  viewerLive.draw();
+  viewerCanvas.classList.add("on");
+  if (!reduceMotion) live.player.start(viewerLive);
+}
+
+function stopLive() {
+  viewerCanvas.classList.remove("on");
+  if (!viewerLive) return;
+  live.player.stop(viewerLive);
+  viewerLive.dispose();
+  viewerLive = null;
+}
+
+/** Redraw every preview in the current theme. */
+function recolorLive() {
+  if (!live) return;
+  for (const link of gallery) link.live?.setTheme(theme[3]);
+  viewerLive?.setTheme(theme[3]);
+}
+
+if ("IntersectionObserver" in window) {
+  import("./live.js").then(async ({ load, Live, Player }) => {
+    if (!(await load())) return;
+    live = { Live, player: new Player() };
+    // Draw each card's first frame as it comes into view.
+    const seen = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) showCard(e.target);
+    }, { rootMargin: "200px" });
+    for (const link of gallery) seen.observe(link);
+    // The cards already on screen now, rather than at the observer's first report,
+    // which browsers hold back until they next render.
+    for (const link of gallery) {
+      const r = link.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < window.innerHeight && r.width > 0) showCard(link);
+    }
+    if (viewer.open && shown) showLive(shown); // opened while loading
+  }).catch(() => { /* the screenshots stay */ });
+}
 
 let saved = null;
 try { saved = localStorage.getItem("glyphdrift-theme"); } catch { /* storage unavailable */ }

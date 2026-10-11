@@ -8,8 +8,17 @@ fn main() {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn main() {
-    eprintln!("Glyphdrift only runs on Windows. Run `cargo test` to exercise the portable core.");
+    if let Err(e) = glyphdrift::macos::run() {
+        glyphdrift::macos::fatal(&e);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn main() {
+    eprintln!(
+        "Glyphdrift runs on Windows and macOS. Run `cargo test` to exercise the portable core."
+    );
     std::process::exit(1);
 }

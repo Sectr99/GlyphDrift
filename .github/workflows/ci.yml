@@ -40,3 +40,6 @@ jobs:
       - run: cargo test
       # The app bundle, for this runner's architecture only; releases build universal.
       - run: macos/bundle.sh --native
+      # The website's live previews: the animations as WebAssembly.
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo clippy -p glyphdrift-web --release --target wasm32-unknown-unknown

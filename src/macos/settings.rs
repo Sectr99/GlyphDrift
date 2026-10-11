@@ -15,9 +15,10 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{ns_string, NSPoint, NSRect, NSSize, NSString};
 
-use super::{tweak_value, with_app, App, Controller};
+use super::{with_app, App, Controller};
 use crate::anim::{self, ANIMATIONS};
 use crate::config::{Config, Rgb};
+use crate::engine::tweak_value;
 use crate::theme::{self, THEMES};
 use crate::ui::{self, Row, FRAME_RATES, SLIDERS};
 

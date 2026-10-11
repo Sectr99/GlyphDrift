@@ -27,6 +27,8 @@ src/
 ├── grid.rs, shape.rs what animations draw into
 ├── icon.rs           the icon shape, shared with build.rs
 ├── ui.rs             settings shared by both hosts: tweak ids, sliders, hints, grouped lists
+├── engine.rs         settings logic shared by both hosts: apply a setting, what a config edit
+│                     affects, frame rate, hover text; reports changes for the host to act on
 └── macos/            the macOS host (see below)
 build.rs              embeds the manifest, icon and version info (no rc.exe)
 macos/                Info.plist and bundle.sh for Glyphdrift.app
@@ -34,7 +36,7 @@ examples/             macos_iconset: the app icon for bundle.sh
 site/                 glyphdrift.com, deployed by Cloudflare Pages
 ```
 
-The core (`anim`, `grid`, `config`, `theme`, `icon`, `shape`, `ui`) is portable and unit-tested on any platform; Windows host code is `cfg(windows)`, macOS host code `cfg(target_os = "macos")`. The hosts share no platform code, so a change to one can't break the other's build, and both can be checked from one machine (see the README).
+The core (`anim`, `grid`, `config`, `theme`, `icon`, `shape`, `ui`, `engine`) is portable and unit-tested on any platform; Windows host code is `cfg(windows)`, macOS host code `cfg(target_os = "macos")`. The hosts share no platform code, so a change to one can't break the other's build, and both can be checked from one machine (see the README).
 
 ## Desktop embedding
 

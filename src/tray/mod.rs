@@ -121,7 +121,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
     // an integer and only used as a PostMessage target.
     unsafe {
         let hinst = GetModuleHandleW(None)?;
-        let class = w!("WallMotionTray");
+        let class = w!("GlyphdriftTray");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(tray_proc),
             hInstance: hinst.into(),
@@ -137,7 +137,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class,
-            w!("WallMotion tray"),
+            w!("Glyphdrift tray"),
             WS_POPUP,
             0,
             0,
@@ -190,7 +190,7 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     };
     let tip = TIP.lock().map(|t| t.clone()).unwrap_or_default();
     let tip = if tip.is_empty() {
-        "WallMotion".into()
+        "Glyphdrift".into()
     } else {
         tip
     };

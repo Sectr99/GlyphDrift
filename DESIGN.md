@@ -1,4 +1,4 @@
-# WallMotion (formerly ASCII Live Wallpaper): Design Document
+# Glyphdrift (formerly Glyphdrift and ASCII Live Wallpaper): Design Document
 
 ## 1. Overview
 
@@ -135,7 +135,7 @@ Character ramp for brightness mapping: `" .:-=+*#%@"` (configurable).
 
 ## 8. Configuration
 
-`config.toml` in `%APPDATA%\WallMotion\`:
+`config.toml` in `%APPDATA%\Glyphdrift\`:
 
 ```toml
 [general]

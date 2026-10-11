@@ -1,8 +1,8 @@
 [package]
-name = "wallmotion"
+name = "glyphdrift"
 version = "0.1.0"
 edition = "2021"
-description = "WallMotion: a lightweight live wallpaper for Windows"
+description = "Glyphdrift: a lightweight live wallpaper for Windows"
 license = "MIT"
 
 [dependencies]

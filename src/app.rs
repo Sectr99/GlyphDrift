@@ -337,13 +337,13 @@ impl App {
     /// Show the current animation and theme, or why it's paused, on the tray icon.
     fn update_tray(&self) {
         let tip = if self.user_paused {
-            "WallMotion: paused".to_string()
+            "Glyphdrift: paused".to_string()
         } else if let Some(reason) = self.auto_paused {
-            format!("WallMotion: paused while {reason}")
+            format!("Glyphdrift: paused while {reason}")
         } else {
             let anim = anim::ANIMATIONS[anim::index_of(&self.cfg.general.animation)].1;
             let theme = THEMES[theme::index_of(&self.cfg.theme.name)].label;
-            format!("WallMotion: {anim} · {theme}")
+            format!("Glyphdrift: {anim} · {theme}")
         };
         tray::set_status(self.tray, &tip, self.paused(), self.user_paused);
     }
@@ -583,7 +583,7 @@ pub fn run() -> Result<()> {
 
         let result = (|| -> Result<()> {
             let hinst = GetModuleHandleW(None)?;
-            let class = w!("WallMotion");
+            let class = w!("Glyphdrift");
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(wndproc),
                 hInstance: hinst.into(),
@@ -599,7 +599,7 @@ pub fn run() -> Result<()> {
                 // Layered: required to render under a WS_EX_NOREDIRECTIONBITMAP Progman.
                 WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 class,
-                w!("WallMotion"),
+                w!("Glyphdrift"),
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                 x,
                 y,
@@ -671,11 +671,11 @@ fn first_instance() -> bool {
     // SAFETY: plain Win32 calls with constant strings. The mutex handle is deliberately
     // never closed: it marks this process as running until it exits.
     unsafe {
-        let mutex = CreateMutexW(None, false, w!("Local\\WallMotion"));
+        let mutex = CreateMutexW(None, false, w!("Local\\Glyphdrift"));
         if mutex.is_ok() && GetLastError() != ERROR_ALREADY_EXISTS {
             return true;
         }
-        if let Ok(tray) = FindWindowW(w!("WallMotionTray"), None) {
+        if let Ok(tray) = FindWindowW(w!("GlyphdriftTray"), None) {
             let mut pid = 0;
             GetWindowThreadProcessId(tray, Some(&mut pid));
             let _ = AllowSetForegroundWindow(pid); // let it bring the settings window forward
@@ -710,7 +710,7 @@ pub fn fatal(text: &str) {
         MessageBoxW(
             None,
             windows::core::PCWSTR(body.as_ptr()),
-            w!("WallMotion"),
+            w!("Glyphdrift"),
             MB_OK | MB_ICONERROR,
         );
     }

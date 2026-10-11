@@ -1,4 +1,4 @@
-# WallMotion
+# Glyphdrift
 
 A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behind your desktop icons.
 
@@ -10,7 +10,7 @@ A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behin
 
 ## Use
 
-Run `wallmotion.exe`. Left-click its tray icon (or run it again) to open **Settings**, which opens beside the tray so the wallpaper stays visible as a live preview:
+Run `glyphdrift.exe`. Left-click its tray icon (or run it again) to open **Settings**, which opens beside the tray so the wallpaper stays visible as a live preview:
 
 - **Animation**, grouped (ASCII, Graphics, Loops, Fluid, Contour)
 - **Theme**, with swatches of each theme's colors
@@ -32,19 +32,19 @@ Changes apply immediately and are remembered.
 
 ## Configuration
 
-Settings live in `%APPDATA%\WallMotion\config.toml`, created when you first change something in Settings or the tray. You can also edit it by hand; changes apply within a second, no restart needed. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
+Settings live in `%APPDATA%\Glyphdrift\config.toml`, created when you first change something in Settings or the tray. You can also edit it by hand; changes apply within a second, no restart needed. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
 
 ## Uninstall
 
 1. Untick **Start with Windows** in the tray menu, then **Quit**.
-2. Delete `wallmotion.exe` and the `%APPDATA%\WallMotion` folder.
+2. Delete `glyphdrift.exe` and the `%APPDATA%\Glyphdrift` folder.
 
 ## Build
 
 Requires Rust with the MSVC toolchain (`x86_64-pc-windows-msvc`).
 
 ```
-cargo build --release      # target\release\wallmotion.exe, no console window
+cargo build --release      # target\release\glyphdrift.exe, no console window
 cargo run                  # debug build with a console for log output; Ctrl+C quits
 cargo test                 # portable core (animations, themes, config); runs on any OS
 cargo clippy --all-targets

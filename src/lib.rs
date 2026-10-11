@@ -1,4 +1,4 @@
-//! WallMotion: a live wallpaper for Windows.
+//! Glyphdrift: a live wallpaper for Windows.
 //!
 //! Portable core (`grid`, `anim`, `config`, `theme`, `icon`, `shape`) builds and tests on any platform.
 //! Windows-only host code (`desktop`, `render`, `tray`, `settings`, `power`, `autostart`, `log`, `app`) is cfg-gated.

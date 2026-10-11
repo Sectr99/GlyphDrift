@@ -223,24 +223,34 @@ pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Res
     std::fs::write(&path, out).map_err(|e| format!("{e}"))
 }
 
-/// `%APPDATA%\WallMotion\config.toml`
+/// `%APPDATA%\Glyphdrift\config.toml`
 pub fn default_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("APPDATA")?;
     Some(
         std::path::PathBuf::from(base)
-            .join("WallMotion")
+            .join("Glyphdrift")
             .join("config.toml"),
     )
 }
 
-/// One-time move of the settings folder from before the WallMotion rename.
+/// The settings folder's names before the Glyphdrift rename, newest first.
+const LEGACY_DIRS: [&str; 2] = ["WallMotion", "ascii-wallpaper"];
+
+/// One-time move of the settings folder from an older name, if there is no current one.
 pub fn migrate() {
     let Some(base) = std::env::var_os("APPDATA") else {
         return;
     };
     let base = std::path::PathBuf::from(base);
-    let (old, new) = (base.join("ascii-wallpaper"), base.join("WallMotion"));
-    if old.is_dir() && !new.exists() {
+    let new = base.join("Glyphdrift");
+    if new.exists() {
+        return;
+    }
+    if let Some(old) = LEGACY_DIRS
+        .iter()
+        .map(|d| base.join(d))
+        .find(|d| d.is_dir())
+    {
         let _ = std::fs::rename(old, new);
     }
 }

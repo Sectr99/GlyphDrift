@@ -293,7 +293,7 @@ pub fn open(wallpaper: HWND) {
         let Ok(hinst) = GetModuleHandleW(None) else {
             return;
         };
-        let class = w!("WallMotionSettings");
+        let class = w!("GlyphdriftSettings");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(proc_),
             hInstance: hinst.into(),
@@ -330,7 +330,7 @@ pub fn open(wallpaper: HWND) {
         let _ = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             class,
-            w!("WallMotion Settings"),
+            w!("Glyphdrift Settings"),
             style | WS_VISIBLE,
             x,
             y,

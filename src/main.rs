@@ -2,14 +2,14 @@
 
 #[cfg(windows)]
 fn main() {
-    if let Err(e) = wallmotion::app::run() {
+    if let Err(e) = glyphdrift::app::run() {
         // Release builds have no console; surface the failure in a dialog.
-        wallmotion::app::fatal(&format!("{e}"));
+        glyphdrift::app::fatal(&format!("{e}"));
     }
 }
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("WallMotion only runs on Windows. Run `cargo test` to exercise the portable core.");
+    eprintln!("Glyphdrift only runs on Windows. Run `cargo test` to exercise the portable core.");
     std::process::exit(1);
 }

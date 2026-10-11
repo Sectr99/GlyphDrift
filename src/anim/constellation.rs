@@ -1,11 +1,11 @@
-//! Constellation: slowly drifting points, joined by faint lines when they pass close.
+//! Drifting points, joined by faint lines when close.
 
 use super::{Animation, Rng, Size};
 use crate::shape::Shape;
 
-// Sizes are px at a 1440 px screen, scaled by `scale` (the focus unit / 1440).
-const PX_PER_STAR: f32 = 18_000.0; // density: one star per this many square pixels
-const LINK: f32 = 140.0; // max distance for a connecting line
+// Sizes in px at a 1440 px screen, scaled by `scale`.
+const PX_PER_STAR: f32 = 18_000.0; // one star per this many square px
+const LINK: f32 = 140.0; // max link distance
 
 struct Star {
     x: f32,
@@ -52,7 +52,7 @@ impl Animation for Constellation {
     fn init(&mut self, size: Size, seed: u64) {
         let mut rng = Rng::new(seed);
         (self.w, self.h) = (size.width, size.height);
-        // Tuned on a 1440 px-tall screen: keep that look there, and the same proportions elsewhere.
+        // Tuned at 1440 px tall; same proportions elsewhere.
         let k = (size.focus.unit() / 1440.0).max(0.25);
         self.scale = k;
         let n = (size.width * size.height / (PX_PER_STAR * k * k)).ceil() as usize;
@@ -72,7 +72,7 @@ impl Animation for Constellation {
     }
 
     fn update(&mut self, dt: f32) {
-        // Wrap with a margin so stars (and their links) leave and re-enter off screen.
+        // Wrap with a margin so stars leave and re-enter off screen.
         let m = LINK * self.scale;
         for s in &mut self.stars {
             s.x = (s.x + s.vx * dt + m).rem_euclid(self.w + 2.0 * m) - m;
@@ -81,7 +81,7 @@ impl Animation for Constellation {
     }
 
     fn draw(&self, out: &mut Vec<Shape>) {
-        // ponytail: O(n^2) pair scan, ~10k pairs at 1440p; use a spatial grid if density grows.
+        // ponytail: O(n^2) pair scan (~10k pairs at 1440p); a spatial grid if density grows.
         for (i, a) in self.stars.iter().enumerate() {
             for b in &self.stars[i + 1..] {
                 let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();

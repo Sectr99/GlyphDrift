@@ -1,4 +1,4 @@
-/// Tiny xorshift64* PRNG. Deterministic for a given seed, no dependencies.
+/// xorshift64* PRNG, deterministic per seed.
 #[derive(Clone, Debug)]
 pub struct Rng(u64);
 
@@ -31,7 +31,7 @@ impl Rng {
     }
 }
 
-/// Stateless hash of (x, y, tick) -> u64, for flicker without storing per-cell state.
+/// Stateless hash of (x, y, tick), for flicker without per-cell state.
 pub fn hash3(x: u32, y: u32, t: u32) -> u64 {
     let mut h = (x as u64) << 40 ^ (y as u64) << 20 ^ t as u64;
     h ^= h >> 33;

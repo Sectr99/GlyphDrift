@@ -1,5 +1,4 @@
-//! Iso-contours of sampled scalar fields (marching squares) and smooth value noise, shared
-//! by the fluid animations.
+//! Marching-squares contours of sampled fields, and smooth value noise.
 
 use super::rng::hash3;
 
@@ -7,11 +6,10 @@ type P = (f32, f32);
 /// A line segment between two points.
 pub type Segment = (P, P);
 
-/// Smallest sample spacing (px) for contour fields drawn at small scales. Finer grids cost
-/// quadratically more and look no smoother.
+/// Smallest sample spacing (px) for contour fields: finer costs more, looks no smoother.
 pub const MIN_CELL: f32 = 8.0;
 
-/// A scalar field sampled on a regular grid of `nx` x `ny` vertices, `cell` px apart.
+/// A scalar field sampled on an `nx` x `ny` grid, `cell` px apart.
 pub struct Field {
     pub nx: usize,
     pub ny: usize,
@@ -20,7 +18,7 @@ pub struct Field {
 }
 
 impl Field {
-    /// Sample `f(x, y)` (screen px) over a `w` x `h` area.
+    /// Sample `f(x, y)` (px) over `w` x `h`.
     pub fn sample(w: f32, h: f32, cell: f32, f: impl Fn(f32, f32) -> f32) -> Self {
         let (nx, ny) = (
             (w / cell).ceil() as usize + 1,
@@ -44,7 +42,7 @@ impl Field {
         self.values[j * self.nx + i]
     }
 
-    /// The field at any point (px), bilinearly interpolated; clamped at the edges.
+    /// Bilinear value at (x, y) px, clamped at the edges.
     pub fn value_at(&self, x: f32, y: f32) -> f32 {
         let fx = (x / self.cell).clamp(0.0, (self.nx - 1) as f32);
         let fy = (y / self.cell).clamp(0.0, (self.ny - 1) as f32);
@@ -59,7 +57,7 @@ impl Field {
         top + (bottom - top) * v
     }
 
-    /// Call `emit(a, b)` for every segment of the iso-line where the field equals `level`.
+    /// Call `emit(a, b)` for each segment of the iso-line at `level`.
     pub fn contour(&self, level: f32, mut emit: impl FnMut(P, P)) {
         for j in 0..self.ny.saturating_sub(1) {
             for i in 0..self.nx.saturating_sub(1) {
@@ -68,9 +66,8 @@ impl Field {
         }
     }
 
-    /// Call `emit(k, a, b)` for every segment of every iso-line `levels[k]`. `levels` must be
-    /// ascending. One pass over the cells, each visiting only the levels that cross it:
-    /// much cheaper than `contour` per level when there are many levels.
+    /// Call `emit(k, a, b)` for each segment of each ascending `levels[k]`, in one pass
+    /// that visits only the levels crossing each cell.
     pub fn contours(&self, levels: &[f32], mut emit: impl FnMut(usize, P, P)) {
         for j in 0..self.ny.saturating_sub(1) {
             for i in 0..self.nx.saturating_sub(1) {
@@ -82,7 +79,7 @@ impl Field {
                 ];
                 let lo = v.iter().copied().fold(f32::INFINITY, f32::min);
                 let hi = v.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                // A level crosses the cell if some corners are above it and some aren't.
+                // Levels between the cell's lowest and highest corner.
                 let first = levels.partition_point(|&l| l < lo);
                 for (k, &level) in levels.iter().enumerate().skip(first) {
                     if level >= hi {
@@ -94,15 +91,14 @@ impl Field {
         }
     }
 
-    /// The segments of every iso-line `levels[k]` (ascending), grouped by level: a level's
-    /// lines come out together, so a renderer can draw each group in one call.
+    /// Segments of each ascending `levels[k]`, grouped by level.
     pub fn segments_by_level(&self, levels: &[f32]) -> Vec<Vec<Segment>> {
         let mut out = vec![Vec::new(); levels.len()];
         self.contours(levels, |k, a, b| out[k].push((a, b)));
         out
     }
 
-    /// Marching squares for one cell. Saddle cells are resolved by the cell's center value.
+    /// Marching squares for one cell; saddles resolved by the center value.
     fn cell(&self, i: usize, j: usize, level: f32, emit: &mut impl FnMut(P, P)) {
         let (tl, tr) = (self.at(i, j), self.at(i + 1, j));
         let (br, bl) = (self.at(i + 1, j + 1), self.at(i, j + 1));
@@ -114,10 +110,9 @@ impl Field {
             return;
         }
         let (x, y, c) = (i as f32 * self.cell, j as f32 * self.cell, self.cell);
-        // The far edges as (i + 1) * cell, not x + cell, so neighbors sharing an edge get
-        // bit-identical points (and the renderer joins their segments).
+        // Far edges as (i + 1) * cell so neighbors get bit-identical points.
         let (x1, y1) = ((i + 1) as f32 * self.cell, (j + 1) as f32 * self.cell);
-        // Where the level crosses an edge between values a and b.
+        // Where the level crosses the edge from a to b.
         let cross = |a: f32, b: f32| ((level - a) / (b - a)).clamp(0.0, 1.0);
         let top = (x + c * cross(tl, tr), y);
         let right = (x1, y + c * cross(tr, br));
@@ -156,7 +151,7 @@ impl Field {
     }
 }
 
-/// Smooth 3D value noise in -1..1: hashed lattice values, smoothstep-interpolated.
+/// Smooth 3D value noise in -1..1.
 pub fn noise3(x: f32, y: f32, z: f32) -> f32 {
     let (xf, yf, zf) = (x.floor(), y.floor(), z.floor());
     let (xi, yi, zi) = (xf as i32, yf as i32, zf as i32);
@@ -216,7 +211,7 @@ mod tests {
 
     #[test]
     fn contour_of_a_disc_is_closed_and_on_the_circle() {
-        // Field = distance from (50, 50); the level-20 contour is a circle of radius 20.
+        // Distance from (50, 50): the level-20 contour is a circle.
         let f = Field::sample(100.0, 100.0, 5.0, |x, y| {
             ((x - 50.0).powi(2) + (y - 50.0).powi(2)).sqrt()
         });

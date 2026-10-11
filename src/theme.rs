@@ -1,16 +1,13 @@
-//! Built-in color themes: terminal classics, the published palettes of popular editor
-//! themes, and a couple of neon ones.
-//!
-//! Each theme has a background plus two three-stop gradients (dim to bright): `warm` for
-//! fire-like animations and `cool` for everything else. The renderer blends from the
-//! background through the stops, so low-brightness cells fade into the background.
+//! Color themes: terminal classics, editor palettes and a few neon ones. Each has a
+//! background and two three-stop gradients: `warm` for fire-like animations, `cool`
+//! for the rest. Low brightness fades into the background.
 
 use crate::config::Rgb;
 
 pub struct Theme {
     pub name: &'static str,
     pub label: &'static str,
-    /// Menu group; the tray separates groups.
+    /// Menu group.
     pub group: &'static str,
     pub bg: Rgb,
     pub cool: [Rgb; 3],
@@ -241,9 +238,8 @@ pub fn mix(a: Rgb, b: Rgb, f: f32) -> Rgb {
     Rgb(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
 
-/// `c` seen through a frosted veil of opacity `glass` over background `bg`: the veil is
-/// the background lifted slightly toward white, which reads as a milky haze. Because the
-/// background is solid this equals drawing a translucent layer on top, at no cost.
+/// `c` under a frosted veil of opacity `glass`: the background lifted toward white.
+/// Free, because the background is solid.
 pub fn frost(c: Rgb, bg: Rgb, glass: f32) -> Rgb {
     mix(c, mix(bg, Rgb(255, 255, 255), 0.08), glass)
 }
@@ -253,7 +249,7 @@ pub fn index_of(name: &str) -> usize {
     THEMES.iter().position(|t| t.name == name).unwrap_or(0)
 }
 
-/// `levels` colors running from just above `bg` up to the last stop.
+/// `levels` colors from just above `bg` up to the last stop.
 pub fn gradient(bg: Rgb, stops: &[Rgb; 3], levels: usize) -> Vec<Rgb> {
     let points = [bg, stops[0], stops[1], stops[2]];
     let segs = (points.len() - 1) as f32;

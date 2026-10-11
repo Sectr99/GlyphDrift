@@ -1,9 +1,6 @@
-//! The app icon from `assets/icon.svg`: a filled square with eight rectangular holes.
-//!
-//! Dependency-free so `build.rs` can include it (`#[path]`) to bake the exe icon, while the
-//! tray rasterizes the same shape at runtime.
+//! The app icon (`assets/icon.svg`), dependency-free so `build.rs` can include it.
 
-/// Holes cut from the filled 2..22 square, in the SVG's 24x24 viewBox (x0, y0, x1, y1).
+/// Holes in the filled 2..22 square, in the 24x24 viewBox (x0, y0, x1, y1).
 const HOLES: [[f32; 4]; 8] = [
     [4.0, 16.0, 8.0, 20.0],
     [10.0, 16.0, 16.0, 20.0],
@@ -15,7 +12,7 @@ const HOLES: [[f32; 4]; 8] = [
     [16.0, 4.0, 20.0, 8.0],
 ];
 
-/// Fraction of pixel (px, py) of an `n` x `n` icon covered by the shape (4x4 supersampling).
+/// Coverage of pixel (px, py) in an `n` x `n` icon (4x4 supersampling).
 pub fn coverage(px: usize, py: usize, n: usize) -> f32 {
     const S: usize = 4;
     let inside = |x: f32, y: f32| {
@@ -32,7 +29,7 @@ pub fn coverage(px: usize, py: usize, n: usize) -> f32 {
     hits as f32 / (S * S) as f32
 }
 
-/// `n` x `n` icon in color `rgb` as top-down BGRA rows, alpha from coverage.
+/// `n` x `n` BGRA icon in `rgb`, top-down, alpha from coverage.
 pub fn bgra(n: usize, rgb: (u8, u8, u8)) -> Vec<u8> {
     let mut out = Vec::with_capacity(n * n * 4);
     for y in 0..n {

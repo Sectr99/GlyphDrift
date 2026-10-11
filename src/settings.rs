@@ -1,7 +1,5 @@
-//! The settings window: animation, theme (with color swatches) and live sliders for speed,
-//! frame rate, glass and scale. Standard Win32 controls, so keyboard navigation and screen
-//! readers work for free. Changes apply as you drag and are saved when you let go; the window
-//! talks to the wallpaper window with messages, like the tray menu.
+//! Settings window: animation, theme swatches, live sliders and the clock toggle. Standard
+//! Win32 controls; changes apply live and save on release, sent as messages like the tray.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
@@ -31,32 +29,32 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetDlgCtrlID, GetDlgItem, IsWindow, LoadIconW, PostMessageW, RegisterClassW, SendMessageW,
     SetForegroundWindow, SetWindowTextW, ShowWindow, SystemParametersInfoW, BM_GETCHECK,
     BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
-    CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT, HMENU, LBS_NOTIFY,
-    LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, NONCLIENTMETRICSW,
-    SPI_GETNONCLIENTMETRICS, SPI_GETWORKAREA, SW_RESTORE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_HSCROLL, WM_MEASUREITEM,
-    WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_TOPMOST,
-    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT, HMENU,
+    LBS_HASSTRINGS, LBS_NOTIFY, LBS_OWNERDRAWVARIABLE, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL,
+    NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SPI_GETWORKAREA, SW_RESTORE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CREATE,
+    WM_CTLCOLORBTN, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND,
+    WM_HSCROLL, WM_MEASUREITEM, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT,
+    WS_EX_TOPMOST, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use crate::anim::ANIMATIONS;
 use crate::theme::{gradient, THEMES};
 use crate::tray::{unpack_state, WM_GET_STATE, WM_SET_ANIMATION, WM_SET_THEME};
 
-/// Sent to the wallpaper window: WPARAM = tweak id | commit << 8, LPARAM = value * 1000.
-/// `commit` (set when a slider is released) means "save to the config too".
+/// To the wallpaper: WPARAM = tweak id | commit << 8 (save too), LPARAM = value * 1000.
 pub const WM_TWEAK: u32 = WM_APP + 9;
-/// Sent to the wallpaper window: WPARAM = tweak id; returns value * 1000.
+/// To the wallpaper: WPARAM = tweak id; returns value * 1000.
 pub const WM_GET_TWEAK: u32 = WM_APP + 10;
-/// Posted to the settings window when the wallpaper's settings change elsewhere (the tray).
+/// To this window after a change from the tray.
 pub const WM_REFRESH: u32 = WM_APP + 12;
 pub const SPEED: usize = 0;
 pub const FPS: usize = 1;
 pub const GLASS: usize = 2;
 pub const SCALE: usize = 3;
 pub const OBJECT_SCALE: usize = 4;
-/// Clock on/off (value 1 or 0); a checkbox, not a slider.
+/// Clock on/off (1 or 0).
 pub const CLOCK: usize = 5;
 
 /// (tweak id, label, slider min, slider max, default value)
@@ -67,7 +65,7 @@ const SLIDERS: [(usize, &str, i32, i32, f32); 4] = [
     (OBJECT_SCALE, "Object scale", 50, 200, 1.0),
 ];
 
-/// Frame-rate choices: (fps, label); 0 = each animation's own rate.
+/// (fps, label); 0 = each animation's own rate.
 const FRAME_RATES: [(f32, &str); 5] = [
     (0.0, "Auto (recommended)"),
     (15.0, "15 fps (lightest)"),
@@ -76,7 +74,7 @@ const FRAME_RATES: [(f32, &str); 5] = [
     (60.0, "60 fps (smoothest)"),
 ];
 
-/// Hover help for each setting, shown on its label and its control.
+/// Hover help per setting.
 fn hint(id: usize) -> &'static str {
     match id {
         SPEED => "How fast the animation moves.",
@@ -100,7 +98,7 @@ fn hint(id: usize) -> &'static str {
     }
 }
 
-/// Index into `FRAME_RATES` of the choice nearest `fps` (a hand-edited config may hold any).
+/// Index of the choice nearest `fps`.
 fn frame_rate_index(fps: f32) -> usize {
     (0..FRAME_RATES.len())
         .min_by(|&a, &b| {
@@ -117,11 +115,11 @@ const ID_CLOCK: usize = 103;
 const ID_CLOCK_LABEL: usize = 104;
 const ID_FPS: usize = 105;
 const SS_NOTIFY: u32 = 0x100;
-const ID_CLOSE: usize = 2; // IDCANCEL, so Esc closes the window
+const ID_CLOSE: usize = 2; // IDCANCEL, so Esc closes
 const ID_SLIDER: usize = 200; // + tweak id
 const ID_VALUE: usize = 300; // + tweak id
 const ID_LABEL: usize = 400; // + tweak id
-const TBM_GETPOS: u32 = 0x400; // WM_USER; not exported by the windows crate
+const TBM_GETPOS: u32 = 0x400; // WM_USER; not in the windows crate
 const CBN_SELCHANGE: usize = 1;
 const LBN_SELCHANGE: usize = 1;
 const THEME_ROWS: i32 = 8;
@@ -131,17 +129,18 @@ const CLIENT_W: i32 = 520;
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 static FONT: AtomicIsize = AtomicIsize::new(0);
-/// Last selected row of the animation dropdown, to step over headings in the same direction.
-static LAST_ROW: AtomicIsize = AtomicIsize::new(0);
+/// Last selected rows, to step over headings in the direction of travel.
+static LAST_ANIM_ROW: AtomicIsize = AtomicIsize::new(0);
+static LAST_THEME_ROW: AtomicIsize = AtomicIsize::new(0);
 static DARK: AtomicBool = AtomicBool::new(false);
 static BG_BRUSH: AtomicIsize = AtomicIsize::new(0);
 static SURFACE_BRUSH: AtomicIsize = AtomicIsize::new(0);
 
-/// Window colors: Windows' own in light mode, Windows 11's dark palette in dark mode.
+/// Windows' colors in light mode, Windows 11's dark palette in dark mode.
 struct Palette {
-    /// Window background.
+    /// Window.
     bg: COLORREF,
-    /// List and dropdown background.
+    /// Lists and dropdowns.
     surface: COLORREF,
     text: COLORREF,
 }
@@ -165,10 +164,10 @@ fn palette() -> Palette {
     }
 }
 
-/// True when Windows is set to dark mode for apps (Settings > Personalization > Colors).
+/// Windows' apps dark mode setting.
 fn apps_use_dark() -> bool {
     let (mut light, mut size) = (1u32, 4u32);
-    // SAFETY: `light` and `size` are live locals; `size` holds the buffer size in bytes.
+    // SAFETY: `light` and `size` are live locals; `size` is the buffer size in bytes.
     let r = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
@@ -187,7 +186,7 @@ fn brush(slot: &AtomicIsize) -> HBRUSH {
     HBRUSH(slot.load(Ordering::Relaxed) as *mut _)
 }
 
-/// Sliders work in hundredths (speed 1.00 = 100, 50% = 50).
+/// Sliders work in hundredths.
 fn slider_pos(value: f32) -> i32 {
     (value * 100.0).round() as i32
 }
@@ -203,46 +202,56 @@ fn value_label(id: usize, value: f32) -> String {
     }
 }
 
-/// One row of the animation dropdown.
+/// A row of a grouped list (the animation dropdown, the theme list).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Row {
-    /// A group heading (not selectable).
+    /// A group heading, not selectable.
     Heading(&'static str),
-    /// An index into `ANIMATIONS`.
-    Anim(usize),
+    /// An index into `ANIMATIONS` or `THEMES`.
+    Item(usize),
 }
 
-/// The animation dropdown: a heading wherever the group changes, then its animations.
-fn anim_rows() -> Vec<Row> {
+/// A heading wherever the group changes, then the items.
+fn grouped_rows(groups: impl Iterator<Item = &'static str>) -> Vec<Row> {
     let mut rows = Vec::new();
-    for (i, &(_, _, group)) in ANIMATIONS.iter().enumerate() {
-        if i == 0 || ANIMATIONS[i - 1].2 != group {
+    let mut last = None;
+    for (i, group) in groups.enumerate() {
+        if last != Some(group) {
             rows.push(Row::Heading(match group {
                 "ascii" => "ASCII",
                 "graphics" => "Graphics",
                 "loops" => "Loops",
                 "fluid" => "Fluid",
                 "contour" => "Contour",
+                "terminal" => "Terminal",
+                "editor" => "Editor",
+                "neon" => "Neon",
                 other => other,
             }));
+            last = Some(group);
         }
-        rows.push(Row::Anim(i));
+        rows.push(Row::Item(i));
     }
     rows
 }
 
-fn row_of_anim(anim: usize) -> usize {
-    anim_rows()
-        .iter()
-        .position(|&r| r == Row::Anim(anim))
-        .unwrap_or(1)
+fn anim_rows() -> Vec<Row> {
+    grouped_rows(ANIMATIONS.iter().map(|a| a.2))
 }
 
-/// The nearest animation row to `row`, searching in the direction of travel first.
-fn nearest_anim_row(rows: &[Row], row: usize, up: bool) -> usize {
-    let is_anim = |i: &usize| matches!(rows.get(*i), Some(Row::Anim(_)));
-    let below = || (row..rows.len()).find(is_anim);
-    let above = || (0..=row.min(rows.len() - 1)).rev().find(is_anim);
+fn theme_rows() -> Vec<Row> {
+    grouped_rows(THEMES.iter().map(|t| t.group))
+}
+
+fn row_of(rows: &[Row], item: usize) -> usize {
+    rows.iter().position(|&r| r == Row::Item(item)).unwrap_or(1)
+}
+
+/// Nearest item row, searching in the direction of travel first.
+fn nearest_item_row(rows: &[Row], row: usize, up: bool) -> usize {
+    let is_item = |i: &usize| matches!(rows.get(*i), Some(Row::Item(_)));
+    let below = || (row..rows.len()).find(is_item);
+    let above = || (0..=row.min(rows.len() - 1)).rev().find(is_item);
     let found = if up {
         above().or_else(below)
     } else {
@@ -251,7 +260,7 @@ fn nearest_anim_row(rows: &[Row], row: usize, up: bool) -> usize {
     found.unwrap_or(row)
 }
 
-/// Which optional controls apply to animation `anim`: (object scale, clock).
+/// Which optional controls apply: (object scale, clock).
 fn applies(anim: usize) -> (bool, bool) {
     let (name, _, group) = ANIMATIONS.get(anim).copied().unwrap_or(ANIMATIONS[0]);
     (group == "loops", name == "topo")
@@ -262,7 +271,7 @@ fn dpi_scale() -> f32 {
     unsafe { GetDpiForSystem() }.max(96) as f32 / 96.0
 }
 
-/// The settings window, if open (for keyboard navigation in the message loop).
+/// The settings window, if open.
 pub fn window() -> HWND {
     HWND(WINDOW.load(Ordering::Relaxed) as *mut _)
 }
@@ -271,10 +280,9 @@ fn target() -> HWND {
     HWND(TARGET.load(Ordering::Relaxed) as *mut _)
 }
 
-/// Open the settings window for the wallpaper window `wallpaper`, or bring it forward.
+/// Open the settings window, or bring it forward.
 pub fn open(wallpaper: HWND) {
-    // SAFETY: standard window creation on the UI thread; the class is registered once and
-    // re-registering just fails harmlessly.
+    // SAFETY: window creation on the UI thread; re-registering the class fails harmlessly.
     unsafe {
         let existing = window();
         if !existing.is_invalid() && IsWindow(existing).as_bool() {
@@ -283,7 +291,7 @@ pub fn open(wallpaper: HWND) {
             return;
         }
         TARGET.store(wallpaper.0 as isize, Ordering::Relaxed);
-        // ponytail: read once per open; a theme switch applies the next time it opens.
+        // ponytail: read once per open; a theme switch applies on the next open.
         DARK.store(apps_use_dark(), Ordering::Relaxed);
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -298,7 +306,7 @@ pub fn open(wallpaper: HWND) {
             lpfnWndProc: Some(proc_),
             hInstance: hinst.into(),
             lpszClassName: class,
-            // MAKEINTRESOURCE(1): the exe icon (resource id 1), an integer passed as a pointer.
+            // MAKEINTRESOURCE(1): the exe icon.
             hIcon: LoadIconW(hinst, PCWSTR(std::ptr::without_provenance(1))).unwrap_or_default(),
             hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as isize as *mut _),
             ..Default::default()
@@ -314,7 +322,7 @@ pub fn open(wallpaper: HWND) {
         };
         let _ = AdjustWindowRectEx(&mut rect, style, false, WS_EX_CONTROLPARENT);
         let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
-        // Bottom-right, by the tray, so the wallpaper's centre stays visible as a preview.
+        // Bottom-right by the tray, so the wallpaper stays visible as a preview.
         let mut work = RECT::default();
         let _ = SystemParametersInfoW(
             SPI_GETWORKAREA,
@@ -348,10 +356,10 @@ fn px(v: i32, s: f32) -> i32 {
     (v as f32 * s).round() as i32
 }
 
-const M: i32 = 16; // margin
+const M: i32 = 16;
 const LABEL_H: i32 = 20;
 
-/// Client height at 96 DPI, matching the layout in `build`.
+/// Client height at 96 DPI, matching `build`.
 fn client_height() -> i32 {
     M + (LABEL_H + 4)
         + 34
@@ -367,7 +375,7 @@ fn client_height() -> i32 {
         + M
 }
 
-/// Create the controls (96-DPI layout scaled by `s`) and load the current settings.
+/// Create the controls (96-DPI layout scaled by `s`) and load the settings.
 unsafe fn build(hwnd: HWND) {
     let s = dpi_scale();
     let Ok(hinst) = GetModuleHandleW(None) else {
@@ -425,7 +433,7 @@ unsafe fn build(hwnd: HWND) {
         .unwrap_or_default();
         SendMessageW(child, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
         if dark {
-            // Windows' own dark control styles (as in Explorer and the file dialogs).
+            // Windows' own dark control styles.
             match class.to_string().unwrap_or_default().as_str() {
                 "STATIC" => {}
                 "COMBOBOX" => {
@@ -458,10 +466,10 @@ unsafe fn build(hwnd: HWND) {
         ID_ANIMATION,
     );
     for row in anim_rows() {
-        // Strings too, so screen readers can read the owner-drawn rows.
+        // Strings too, for screen readers.
         let text = match row {
             Row::Heading(name) => name,
-            Row::Anim(i) => ANIMATIONS[i].1,
+            Row::Item(i) => ANIMATIONS[i].1,
         };
         SendMessageW(
             combo,
@@ -482,12 +490,23 @@ unsafe fn build(hwnd: HWND) {
     let list = control(
         w!("LISTBOX"),
         "",
-        WINDOW_STYLE((LBS_OWNERDRAWFIXED | LBS_NOTIFY) as u32) | WS_TABSTOP | WS_VSCROLL,
+        WINDOW_STYLE((LBS_OWNERDRAWVARIABLE | LBS_HASSTRINGS | LBS_NOTIFY) as u32)
+            | WS_TABSTOP
+            | WS_VSCROLL,
         (M, y, full, THEME_ROWS * ROW_H + 4),
         ID_THEME,
     );
-    for i in 0..THEMES.len() {
-        SendMessageW(list, LB_ADDSTRING, WPARAM(0), LPARAM(i as isize)); // owner-drawn: data only
+    for row in theme_rows() {
+        let text = match row {
+            Row::Heading(name) => name,
+            Row::Item(i) => THEMES[i].label,
+        };
+        SendMessageW(
+            list,
+            LB_ADDSTRING,
+            WPARAM(0),
+            LPARAM(HSTRING::from(text).as_ptr() as isize),
+        );
     }
     y += THEME_ROWS * ROW_H + 4 + 14;
     for (id, label, min, max, _) in SLIDERS {
@@ -543,8 +562,8 @@ unsafe fn build(hwnd: HWND) {
         );
     }
     y += 36;
-    // The checkbox is only as wide as its box (its text stays, for screen readers) and a
-    // clickable label sits beside it: themed checkboxes ignore the dark text color.
+    // Themed checkboxes ignore the dark text color: the box is sized to hide its own text
+    // (kept for screen readers) and a clickable label sits beside it.
     control(
         w!("BUTTON"),
         "Show clock (Topographic drift)",
@@ -578,8 +597,7 @@ unsafe fn build(hwnd: HWND) {
     load(hwnd);
 }
 
-/// Hover help (see `hint`) on each setting's label and control. Labels carry it too, so it
-/// still shows when the control itself is greyed out.
+/// Hover help on each label and control; labels keep it when the control is greyed out.
 unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
     let Ok(tip) = CreateWindowExW(
         WS_EX_TOPMOST,
@@ -624,7 +642,7 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
         let Ok(child) = GetDlgItem(hwnd, control as i32) else {
             continue;
         };
-        // The tooltip copies the text when the tool is added.
+        // The tooltip copies the text.
         let mut text: Vec<u16> = hint(setting).encode_utf16().chain(Some(0)).collect();
         let info = TTTOOLINFOW {
             cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
@@ -643,24 +661,26 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
     }
 }
 
-/// Reflect the wallpaper's current settings in the controls.
+/// Show the wallpaper's current settings.
 unsafe fn load(hwnd: HWND) {
     let (anim, theme) = unpack_state(SendMessageW(target(), WM_GET_STATE, WPARAM(0), LPARAM(0)).0);
-    let row = row_of_anim(anim);
-    LAST_ROW.store(row as isize, Ordering::Relaxed);
+    let row = row_of(&anim_rows(), anim);
+    LAST_ANIM_ROW.store(row as isize, Ordering::Relaxed);
     SendMessageW(
         GetDlgItem(hwnd, ID_ANIMATION as i32).unwrap_or_default(),
         CB_SETCURSEL,
         WPARAM(row),
         LPARAM(0),
     );
+    let theme_row = row_of(&theme_rows(), theme);
+    LAST_THEME_ROW.store(theme_row as isize, Ordering::Relaxed);
     SendMessageW(
         GetDlgItem(hwnd, ID_THEME as i32).unwrap_or_default(),
         LB_SETCURSEL,
-        WPARAM(theme),
+        WPARAM(theme_row),
         LPARAM(0),
     );
-    // Enable first: `show` labels a disabled slider "Loops only" instead of its value.
+    // Before `show`, which labels disabled sliders "Loops only".
     set_applicable(hwnd, anim);
     for (id, ..) in SLIDERS {
         show(hwnd, id, get_tweak(id));
@@ -681,11 +701,11 @@ unsafe fn load(hwnd: HWND) {
 }
 
 fn get_tweak(id: usize) -> f32 {
-    // SAFETY: plain message send to the wallpaper window.
+    // SAFETY: plain message send.
     unsafe { SendMessageW(target(), WM_GET_TWEAK, WPARAM(id), LPARAM(0)).0 as f32 / 1000.0 }
 }
 
-/// Grey out the controls that do nothing for animation `anim`.
+/// Grey out the controls that do nothing for `anim`.
 unsafe fn set_applicable(hwnd: HWND, anim: usize) {
     let (object_scale, clock) = applies(anim);
     for (id, on) in [(ID_SLIDER + OBJECT_SCALE, object_scale), (ID_CLOCK, clock)] {
@@ -693,8 +713,7 @@ unsafe fn set_applicable(hwnd: HWND, anim: usize) {
             let _ = EnableWindow(control, on);
         }
     }
-    // Their labels stay enabled (disabled statics draw embossed, which looks broken on
-    // dark backgrounds) and are muted instead; see WM_CTLCOLORSTATIC.
+    // Labels stay enabled (disabled statics look broken on dark) and are muted instead.
     for id in [
         ID_LABEL + OBJECT_SCALE,
         ID_VALUE + OBJECT_SCALE,
@@ -706,7 +725,7 @@ unsafe fn set_applicable(hwnd: HWND, anim: usize) {
     }
 }
 
-/// True if the label `id` belongs to a control that is greyed out.
+/// True if label `id` belongs to a greyed-out control.
 unsafe fn label_inactive(hwnd: HWND, id: usize) -> bool {
     let owner = match id {
         _ if id == ID_LABEL + OBJECT_SCALE || id == ID_VALUE + OBJECT_SCALE => {
@@ -738,7 +757,30 @@ unsafe fn show(hwnd: HWND, id: usize, value: f32) {
     }
 }
 
-/// One row of the animation dropdown: headings in muted text, animations indented below.
+/// The item picked in a grouped list (`get`/`set` are its cursel messages). Headings can't
+/// be chosen, so the selection moves on to the nearest item in the direction of travel.
+unsafe fn pick(
+    list: HWND,
+    (get, set): (u32, u32),
+    rows: &[Row],
+    last: &AtomicIsize,
+) -> Option<usize> {
+    let sel = SendMessageW(list, get, WPARAM(0), LPARAM(0)).0;
+    if sel < 0 {
+        return None;
+    }
+    let row = nearest_item_row(rows, sel as usize, sel < last.load(Ordering::Relaxed));
+    if row != sel as usize {
+        SendMessageW(list, set, WPARAM(row), LPARAM(0));
+    }
+    last.store(row as isize, Ordering::Relaxed);
+    match rows.get(row) {
+        Some(&Row::Item(i)) => Some(i),
+        _ => None,
+    }
+}
+
+/// Animation dropdown row: muted headings, indented animations.
 unsafe fn draw_anim_row(d: &DRAWITEMSTRUCT) {
     let rows = anim_rows();
     let Some(&row) = rows.get(d.itemID as usize) else {
@@ -746,7 +788,7 @@ unsafe fn draw_anim_row(d: &DRAWITEMSTRUCT) {
         return;
     };
     let in_field = d.itemState.0 & ODS_COMBOBOXEDIT.0 != 0;
-    let selected = d.itemState.0 & ODS_SELECTED.0 != 0 && matches!(row, Row::Anim(_));
+    let selected = d.itemState.0 & ODS_SELECTED.0 != 0 && matches!(row, Row::Item(_));
     if selected {
         FillRect(d.hDC, &d.rcItem, GetSysColorBrush(COLOR_HIGHLIGHT));
     } else {
@@ -756,7 +798,7 @@ unsafe fn draw_anim_row(d: &DRAWITEMSTRUCT) {
     let s = dpi_scale();
     let (text, color, indent) = match row {
         Row::Heading(name) => (name, muted_text(), 6),
-        Row::Anim(i) => (
+        Row::Item(i) => (
             ANIMATIONS[i].1,
             if selected {
                 COLORREF(GetSysColor(COLOR_HIGHLIGHTTEXT))
@@ -780,7 +822,7 @@ unsafe fn draw_anim_row(d: &DRAWITEMSTRUCT) {
     );
 }
 
-/// Secondary text: group headings.
+/// Group headings.
 fn muted_text() -> COLORREF {
     if DARK.load(Ordering::Relaxed) {
         COLORREF(0x9a9a9a)
@@ -792,7 +834,7 @@ fn muted_text() -> COLORREF {
 
 fn tweak(id: usize, value: f32, commit: bool) {
     let wp = id | usize::from(commit) << 8;
-    // SAFETY: plain message post to the wallpaper window.
+    // SAFETY: plain message post.
     unsafe {
         let _ = PostMessageW(
             target(),
@@ -803,13 +845,31 @@ fn tweak(id: usize, value: f32, commit: bool) {
     }
 }
 
-/// One theme row: its name, then swatches of its background, cool and warm gradients.
+/// Theme row: name, then background, cool and warm swatches; or a muted group heading.
 unsafe fn draw_theme_row(d: &DRAWITEMSTRUCT) {
-    let Some(theme) = THEMES.get(d.itemID as usize) else {
-        return;
+    let rc = d.rcItem;
+    let theme = match theme_rows().get(d.itemID as usize) {
+        Some(&Row::Item(i)) => &THEMES[i],
+        Some(&Row::Heading(name)) => {
+            FillRect(d.hDC, &rc, brush(&SURFACE_BRUSH));
+            SetBkMode(d.hDC, TRANSPARENT);
+            SetTextColor(d.hDC, muted_text());
+            let mut text_rc = RECT {
+                left: rc.left + px(8, dpi_scale()),
+                ..rc
+            };
+            let mut text: Vec<u16> = name.encode_utf16().collect();
+            DrawTextW(
+                d.hDC,
+                &mut text,
+                &mut text_rc,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+            );
+            return;
+        }
+        None => return,
     };
     let selected = d.itemState.0 & ODS_SELECTED.0 != 0;
-    let rc = d.rcItem;
     if selected {
         FillRect(d.hDC, &rc, GetSysColorBrush(COLOR_HIGHLIGHT));
     } else {
@@ -904,7 +964,9 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
         }
         WM_MEASUREITEM => {
             let m = &mut *(lp.0 as *mut MEASUREITEMSTRUCT);
-            let h = if m.CtlID as usize == ID_ANIMATION {
+            let heading = m.CtlID as usize == ID_THEME
+                && matches!(theme_rows().get(m.itemID as usize), Some(Row::Heading(_)));
+            let h = if m.CtlID as usize == ID_ANIMATION || heading {
                 24
             } else {
                 ROW_H
@@ -930,20 +992,10 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
             let source = HWND(lp.0 as *mut _);
             match id {
                 ID_ANIMATION if code == CBN_SELCHANGE => {
-                    let sel = SendMessageW(source, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
-                    if sel >= 0 {
-                        // Headings can't be chosen: move on to the nearest animation.
-                        let rows = anim_rows();
-                        let up = sel < LAST_ROW.load(Ordering::Relaxed);
-                        let row = nearest_anim_row(&rows, sel as usize, up);
-                        if row != sel as usize {
-                            SendMessageW(source, CB_SETCURSEL, WPARAM(row), LPARAM(0));
-                        }
-                        LAST_ROW.store(row as isize, Ordering::Relaxed);
-                        if let Some(Row::Anim(anim)) = rows.get(row) {
-                            let _ =
-                                PostMessageW(target(), WM_SET_ANIMATION, WPARAM(*anim), LPARAM(0));
-                        }
+                    let rows = anim_rows();
+                    let picked = pick(source, (CB_GETCURSEL, CB_SETCURSEL), &rows, &LAST_ANIM_ROW);
+                    if let Some(anim) = picked {
+                        let _ = PostMessageW(target(), WM_SET_ANIMATION, WPARAM(anim), LPARAM(0));
                     }
                 }
                 ID_FPS if code == CBN_SELCHANGE => {
@@ -953,14 +1005,14 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                     }
                 }
                 ID_THEME if code == LBN_SELCHANGE => {
-                    let sel = SendMessageW(source, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
-                    if sel >= 0 {
-                        let _ =
-                            PostMessageW(target(), WM_SET_THEME, WPARAM(sel as usize), LPARAM(0));
+                    let rows = theme_rows();
+                    let picked = pick(source, (LB_GETCURSEL, LB_SETCURSEL), &rows, &LAST_THEME_ROW);
+                    if let Some(theme) = picked {
+                        let _ = PostMessageW(target(), WM_SET_THEME, WPARAM(theme), LPARAM(0));
                     }
                 }
                 ID_CLOCK | ID_CLOCK_LABEL if code == 0 && !label_inactive(hwnd, ID_CLOCK_LABEL) => {
-                    // BN_CLICKED / STN_CLICKED; a label click toggles the checkbox itself.
+                    // BN_CLICKED / STN_CLICKED; a label click toggles the box.
                     let check = GetDlgItem(hwnd, ID_CLOCK as i32).unwrap_or_default();
                     let mut on = SendMessageW(check, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0;
                     if id == ID_CLOCK_LABEL {
@@ -979,7 +1031,7 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                     tweak(FPS, 0.0, true);
                     for (sid, _, _, _, default) in SLIDERS {
                         if let Ok(slider) = GetDlgItem(hwnd, (ID_SLIDER + sid) as i32) {
-                            // A greyed-out slider's value is invisible; leave it alone.
+                            // Leave greyed-out sliders alone.
                             if !IsWindowEnabled(slider).as_bool() {
                                 continue;
                             }
@@ -1004,7 +1056,7 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                 if let Ok(label) = GetDlgItem(hwnd, (ID_VALUE + id) as i32) {
                     let _ = SetWindowTextW(label, &HSTRING::from(value_label(id, value)));
                 }
-                // Live while dragging; saved when released (or after a keyboard step).
+                // Live while dragging; saved on release.
                 tweak(id, value, (wp.0 & 0xFFFF) as u32 == TB_ENDTRACK);
             }
             LRESULT(0)
@@ -1048,25 +1100,33 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_headings_are_skipped() {
-        let rows = anim_rows();
-        assert_eq!(rows[0], Row::Heading("ASCII"));
-        let anims = rows.iter().filter(|r| matches!(r, Row::Anim(_))).count();
-        assert_eq!(anims, ANIMATIONS.len());
-        for i in 0..ANIMATIONS.len() {
-            assert_eq!(rows[row_of_anim(i)], Row::Anim(i));
+    fn grouped_lists_have_every_item_once() {
+        for (rows, n, first) in [
+            (anim_rows(), ANIMATIONS.len(), "ASCII"),
+            (theme_rows(), THEMES.len(), "Terminal"),
+        ] {
+            assert_eq!(rows[0], Row::Heading(first));
+            assert_eq!(rows.iter().filter(|r| matches!(r, Row::Item(_))).count(), n);
+            for i in 0..n {
+                assert_eq!(rows[row_of(&rows, i)], Row::Item(i));
+            }
         }
+    }
+
+    #[test]
+    fn headings_are_skipped() {
+        let rows = anim_rows();
         let second = rows
             .iter()
             .skip(1)
             .position(|r| matches!(r, Row::Heading(_)))
             .unwrap()
             + 1;
-        // Down onto a heading goes to the first animation below it; up goes above it.
-        assert_eq!(nearest_anim_row(&rows, second, false), second + 1);
-        assert_eq!(nearest_anim_row(&rows, second, true), second - 1);
-        // Up onto the very first heading has nowhere to go but down.
-        assert_eq!(nearest_anim_row(&rows, 0, true), 1);
+        // Onto a heading: down goes below it, up goes above.
+        assert_eq!(nearest_item_row(&rows, second, false), second + 1);
+        assert_eq!(nearest_item_row(&rows, second, true), second - 1);
+        // Nowhere to go above the first heading.
+        assert_eq!(nearest_item_row(&rows, 0, true), 1);
         assert_eq!(value_label(SCALE, 1.25), "125%");
     }
 }

@@ -1,4 +1,4 @@
-//! Tiny 3D helpers for the wireframe loops: rotate, project, and shade by depth.
+//! 3D helpers for the wireframe loops.
 
 #[derive(Clone, Copy, Debug)]
 pub struct V3 {
@@ -33,7 +33,7 @@ impl V3 {
     }
 }
 
-/// Brightness for depth `z` in -1 (far) ..= 1 (near), blending `far` to `near`.
+/// Brightness for depth `z` (-1 far, 1 near), from `far` to `near`.
 pub fn shade(z: f32, far: f32, near: f32) -> u8 {
     let k = ((z + 1.0) / 2.0).clamp(0.0, 1.0);
     (far + (near - far) * k) as u8

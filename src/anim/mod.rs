@@ -31,16 +31,16 @@ pub use wind::Wind;
 use crate::grid::Grid;
 use crate::shape::Shape;
 
-/// A rectangle in window pixels, with the user's scale settings for sizes drawn in it.
+/// A rectangle in window px, with the user's scale settings.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
     pub w: f32,
     pub h: f32,
-    /// Overall scale (settings: "Overall scale").
+    /// Overall scale.
     pub zoom: f32,
-    /// Extra scale for centered objects (settings: "Object scale").
+    /// Extra scale for centered objects.
     pub object_zoom: f32,
 }
 
@@ -56,13 +56,12 @@ impl Rect {
         }
     }
 
-    /// The scale unit for sizes: the smaller side, so features look the same on any aspect,
-    /// times the overall scale.
+    /// Scale unit for sizes: the smaller side times the overall scale.
     pub fn unit(&self) -> f32 {
         self.w.min(self.h) * self.zoom
     }
 
-    /// The scale unit for centered objects: `unit` times the object scale.
+    /// Scale unit for centered objects.
     pub fn object_unit(&self) -> f32 {
         self.unit() * self.object_zoom
     }
@@ -74,10 +73,9 @@ impl Default for Rect {
     }
 }
 
-/// Drawing area handed to `init`: the character grid, the window size in pixels, and the
-/// `focus` rectangle (the primary monitor within the window). Full-bleed animations fill the
-/// whole window; centered ones center on `focus`; both take their scale from `focus.unit()`,
-/// so a multi-monitor desktop doesn't split a centered object or shrink features.
+/// Drawing area for `init`: character grid, window size (px) and `focus`, the primary
+/// monitor within the window. Full-bleed animations fill the window, centered ones center
+/// on `focus`; both scale by `focus.unit()`.
 #[derive(Clone, Copy, Debug)]
 pub struct Size {
     pub cols: usize,
@@ -88,7 +86,7 @@ pub struct Size {
 }
 
 impl Size {
-    /// A `cols` x `rows` grid of nominal 8x16 px cells (tests and previews).
+    /// A `cols` x `rows` grid of nominal 8x16 px cells (tests).
     pub fn cells(cols: usize, rows: usize) -> Self {
         let (width, height) = (cols as f32 * 8.0, rows as f32 * 16.0);
         Self {
@@ -107,27 +105,25 @@ pub trait Animation {
     fn warm(&self) -> bool {
         false
     }
-    /// Frame rate used when the config says "auto" (fps = 0).
+    /// Frame rate when the config says auto (fps = 0).
     fn fps(&self) -> u32 {
         24
     }
-    /// Called once before the first `update`, and again on resize.
+    /// Called before the first `update`, and on resize.
     fn init(&mut self, size: Size, seed: u64);
-    /// Advance simulation by `dt` seconds.
+    /// Advance by `dt` seconds.
     fn update(&mut self, dt: f32);
-    /// Write the current frame into `grid` (`size.cols` x `size.rows` from `init`).
-    /// Shape-only animations keep the default, which leaves the grid empty.
+    /// Write the current frame into `grid`. Shape-only animations leave it empty.
     fn render(&self, grid: &mut Grid) {
         grid.clear();
     }
-    /// Append the current frame's vector shapes. Grid-only animations draw none.
+    /// Append the current frame's vector shapes.
     fn draw(&self, _out: &mut Vec<Shape>) {}
-    /// The local time and long date to show, or None for no clock. Called every frame;
-    /// only animations with a clock area use it.
+    /// Local time and long date, or None for no clock. Called every frame.
     fn set_clock(&mut self, _clock: Option<&[String; 2]>) {}
 }
 
-/// (config name, menu label, menu group); the tray separates groups.
+/// (config name, menu label, menu group).
 pub const ANIMATIONS: &[(&str, &str, &str)] = &[
     ("matrix", "Matrix rain", "ascii"),
     ("plasma", "Plasma", "ascii"),
@@ -154,7 +150,6 @@ pub const ANIMATIONS: &[(&str, &str, &str)] = &[
     ("dunes", "Dune ripples", "contour"),
 ];
 
-/// Speed presets offered in the tray: (multiplier, menu label).
 /// Index into `ANIMATIONS`; unknown names give 0 (matrix).
 pub fn index_of(name: &str) -> usize {
     ANIMATIONS.iter().position(|a| a.0 == name).unwrap_or(0)
@@ -233,9 +228,8 @@ mod tests {
         }
     }
 
-    /// Frame cost of each animation at 3440x1440 (update + render + draw, no painting), at
-    /// overall scale 1 or, with GLYPHDRIFT_SCALE=0.5, at that scale (smaller font, so more
-    /// character cells). Run with `cargo test --release frame_cost -- --ignored --nocapture`.
+    /// Frame cost per animation at 3440x1440, without painting. GLYPHDRIFT_SCALE=0.5 runs
+    /// it at that overall scale. `cargo test --release frame_cost -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn frame_cost() {
@@ -283,7 +277,7 @@ mod tests {
 
     #[test]
     fn every_animation_stays_bounded_at_4k() {
-        // Small test grids once hid a draw loop that never ended at full-screen coordinates.
+        // Small grids once hid a loop that never ended at full-screen coordinates.
         let size = Size {
             cols: 480,
             rows: 135,
@@ -297,7 +291,7 @@ mod tests {
             let mut g = Grid::new(size.cols, size.rows);
             let mut shapes = Vec::new();
             for _ in 0..3 {
-                a.update(7.3); // big steps reach late loop phases quickly
+                a.update(7.3); // big steps reach late phases quickly
                 a.render(&mut g);
                 shapes.clear();
                 a.draw(&mut shapes);
@@ -308,7 +302,7 @@ mod tests {
 
     #[test]
     fn centered_loops_follow_the_primary_monitor_and_full_bleed_fills_the_desktop() {
-        // Two 1600x1000 monitors side by side, the primary on the right.
+        // Two 1600x1000 monitors, the primary on the right.
         let size = Size {
             cols: 400,
             rows: 70,
@@ -334,7 +328,7 @@ mod tests {
         };
         for &(name, _, group) in ANIMATIONS {
             if group != "loops" || name == "globe" {
-                continue; // the globe is deliberately right of center
+                continue; // the globe is deliberately off-center
             }
             let x = xs(name);
             let mean = x.iter().sum::<f32>() / x.len() as f32;

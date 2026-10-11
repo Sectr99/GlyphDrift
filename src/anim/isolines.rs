@@ -1,7 +1,4 @@
-//! Line-field animations in the topographic style: ridgelines, isobars, wood grain, wave
-//! interference, hillshaded terrain and dune ripples. Fine lines, a weight hierarchy, slow
-//! organic change. Shaded ones are hybrids: ASCII shading (cheap: the glyph renderer batches
-//! a whole frame into a few draw calls) with vector lines on top.
+//! Topographic-style line fields. Shaded ones draw ASCII relief (cheap) under vector lines.
 
 use std::f32::consts::TAU;
 
@@ -16,7 +13,7 @@ fn rand01(a: u32, b: u32) -> f32 {
     (hash3(a, b, 91) & 0xFFFF) as f32 / 65535.0
 }
 
-/// Elapsed time and drawing area, shared by every animation here.
+/// Elapsed time and drawing area.
 #[derive(Default)]
 struct Clock {
     t: f32,
@@ -53,7 +50,7 @@ macro_rules! line_animation {
                 $name
             }
             fn fps(&self) -> u32 {
-                20 // slow drift; drawing is the expensive part, so fewer frames save the most
+                20 // slow drift: fewer frames save the most
             }
             fn init(&mut self, size: Size, seed: u64) {
                 self.0.init(size, seed);
@@ -78,8 +75,7 @@ line_animation!(Interference, "interference");
 line_animation!(Hillshade, "hillshade");
 line_animation!(Dunes, "dunes");
 
-/// Draw every iso-line of `field` at `levels` (ascending), styling each with
-/// `style(index) -> (weight, brightness)`.
+/// Draw iso-lines of `field` at ascending `levels`; `style(k)` gives (weight, brightness).
 fn contours(
     out: &mut Vec<Shape>,
     pen: Pen,
@@ -107,10 +103,8 @@ impl Ridgelines {
         grid.clear();
     }
 
-    /// Stacked terrain profiles running edge to edge, peaking toward the middle of the
-    /// primary monitor, flowing toward the viewer.
-    /// Drawn front to back with a floating horizon: a line shows only where it rises above
-    /// everything already drawn, so near ridges hide the ones behind.
+    /// Stacked terrain profiles flowing toward the viewer, peaking mid-monitor. Drawn front
+    /// to back with a floating horizon, so near ridges hide the ones behind.
     fn frame(&self, out: &mut Vec<Shape>) {
         const LINES: usize = 46;
         let Clock { t, w, h, .. } = self.0;
@@ -122,7 +116,7 @@ impl Ridgelines {
         let (base, spacing, amp) = (h * 0.84, h * 0.012, h * 0.3);
         let mut horizon = vec![f32::MAX; samples + 1];
         for line in 0..LINES {
-            // Noise row coordinate advances with time: the terrain flows toward the viewer.
+            // The noise row advances with time: the terrain flows forward.
             let row = line as f32 * 0.16 + t * 0.12;
             let depth = line as f32 / LINES as f32; // 0 front .. 1 back
             let y_base = base - line as f32 * spacing;
@@ -130,8 +124,8 @@ impl Ridgelines {
                 .map(|k| {
                     let f = k as f32 / samples as f32;
                     let x = x0 + (x1 - x0) * f;
-                    let envelope = (-((x - peak_x) / peak_w).powi(2)).exp(); // peaks mid-screen
-                    let u = x / unit; // position in feature units
+                    let envelope = (-((x - peak_x) / peak_w).powi(2)).exp();
+                    let u = x / unit;
                     let n = (fbm3(u * 3.0, row, t * 0.02) * 0.5 + 0.5).powf(2.4) * 1.6;
                     (
                         x,
@@ -165,16 +159,16 @@ impl Ridgelines {
     }
 }
 
-/// A drifting high- or low-pressure system: (x, y, radius) in px, signed strength.
+/// Drifting pressure systems: (x, y, radius) in px and signed strength.
 fn systems(c: &Clock) -> Vec<(f32, f32, f32, f32)> {
     let unit = c.unit;
-    // About six systems per 1.6:1 screen area, so wide desktops aren't sparse.
-    let screens = c.w * c.h / (c.unit * c.unit * 1.6); // in 1.6:1 primary-sized screens
+    // About six per 1.6:1 screen area, so wide desktops aren't sparse.
+    let screens = c.w * c.h / (c.unit * c.unit * 1.6);
     let count = (6.0 * screens).round().clamp(4.0, 18.0) as u32;
     (0..count)
         .map(|i| {
             let r = |k: u32| rand01(i, k);
-            // Systems drift eastward and wrap, wandering a little north and south.
+            // Drift east and wrap, wandering north and south.
             let speed = unit * (0.006 + 0.006 * r(1));
             let x = (c.w * r(2) + c.t * speed).rem_euclid(c.w * 1.4) - c.w * 0.2;
             let y = c.h * (0.2 + 0.6 * r(3)) + c.h * 0.05 * (c.t * 0.03 + TAU * r(4)).sin();
@@ -185,14 +179,14 @@ fn systems(c: &Clock) -> Vec<(f32, f32, f32, f32)> {
 }
 
 impl Isobars {
-    /// Pressure at (x, y) given this frame's `systems`.
+    /// Pressure at (x, y) from this frame's `systems`.
     fn pressure(&self, systems: &[(f32, f32, f32, f32)], x: f32, y: f32) -> f32 {
         let unit = self.0.unit;
         systems
             .iter()
             .map(|&(sx, sy, r, a)| {
                 let d2 = ((x - sx).powi(2) + (y - sy).powi(2)) / (r * r);
-                // Beyond 3 radii a system adds under 0.01%: skip the exp.
+                // Negligible beyond 3 radii.
                 if d2 > 9.0 {
                     0.0
                 } else {
@@ -203,7 +197,7 @@ impl Isobars {
             + 0.12 * fbm3(x / (unit * 0.5), y / (unit * 0.5), self.0.t * 0.01)
     }
 
-    /// H and L markers with their central pressure, in the character grid.
+    /// H and L labels with central pressure.
     fn text(&self, grid: &mut Grid) {
         grid.clear();
         let c = &self.0;
@@ -236,7 +230,7 @@ impl Isobars {
         }
     }
 
-    /// Isobars every 2 hPa, heavier every 5th; brighter toward high pressure.
+    /// Isobars every 2 hPa, heavier every 5th.
     fn frame(&self, out: &mut Vec<Shape>) {
         let Clock { w, h, .. } = self.0;
         let pen = Pen::new(self.0.unit);
@@ -261,8 +255,7 @@ impl WoodGrain {
         grid.clear();
     }
 
-    /// Tree rings: elongated, noise-warped rings around a slowly drifting knot. Ring widths
-    /// vary year to year, and late-wood rings (every other) are heavier and brighter.
+    /// Tree rings around a drifting knot; ring widths vary, late wood is heavier.
     fn frame(&self, out: &mut Vec<Shape>) {
         const RINGS: usize = 64;
         let Clock { t, w, h, .. } = self.0;
@@ -274,12 +267,11 @@ impl WoodGrain {
             f.y + f.h * (0.5 + 0.1 * (t * 0.017).cos()),
         );
         let field = Field::sample(w, h, pen.px(8.0).max(MIN_CELL), |x, y| {
-            let (dx, dy) = ((x - knot.0) / (unit * 2.6), (y - knot.1) / unit); // stretched along the grain
-                                                                               // Warp streaked along the grain: long in x, short in y.
+            let (dx, dy) = ((x - knot.0) / (unit * 2.6), (y - knot.1) / unit); // along the grain
             let warp = 0.11 * fbm3(x / (unit * 0.9), y / (unit * 0.18), t * 0.015);
             (dx * dx + dy * dy).sqrt() + warp
         });
-        // Irregular growth: each ring's width varies, as good and bad years do.
+        // Irregular growth: good and bad years.
         let mut levels = Vec::with_capacity(RINGS);
         let mut r = 0.0;
         for k in 0..RINGS as u32 {
@@ -287,7 +279,7 @@ impl WoodGrain {
             levels.push(r);
         }
         contours(out, pen, &field, &levels, |k| {
-            let fade = 1.0 - k as f32 / RINGS as f32 * 0.4; // outer rings slightly dimmer
+            let fade = 1.0 - k as f32 / RINGS as f32 * 0.4;
             if k % 2 == 0 {
                 (HAIR + 0.55, (200.0 * fade) as u8) // late wood
             } else {
@@ -302,8 +294,7 @@ impl Interference {
         grid.clear();
     }
 
-    /// Circular waves from three slowly wandering sources; contours of their sum make
-    /// shifting moiré bands, like a ripple tank seen from above.
+    /// Waves from three wandering sources; contours of their sum make moiré bands.
     fn frame(&self, out: &mut Vec<Shape>) {
         let Clock { t, w, h, .. } = self.0;
         let unit = self.0.unit;
@@ -332,9 +323,8 @@ impl Interference {
     }
 }
 
-/// A height function sampled once at every character cell's center, with slopes from
-/// central differences between neighboring cells. For surfaces that are smooth at the
-/// cell scale, this is 5x cheaper than sampling around each cell.
+/// Heights sampled once per character cell, with slopes from neighboring cells: 5x
+/// cheaper than sampling around each cell, for surfaces smooth at that scale.
 struct CellHeights {
     cols: usize,
     rows: usize,
@@ -373,10 +363,8 @@ impl CellHeights {
     }
 }
 
-/// Shade the character grid from a surface: `surface(col, row, x, y)` gives the height and
-/// its slopes (per px) at each cell's center (x, y). Each cell gets a glyph and brightness
-/// from how much the surface faces `light`. `relief` scales slopes, `ambient` lifts faces
-/// turned away from the light, and `tint(height)` lightens high ground (0..1 factor).
+/// Shade the grid from `surface(col, row, x, y) -> (height, d/dx, d/dy)` lit by `light`.
+/// `relief` scales slopes, `ambient` lifts shadowed faces, `tint(height)` brightens.
 fn shade_cells(
     c: &Clock,
     grid: &mut Grid,
@@ -401,7 +389,7 @@ fn shade_cells(
             let lit = ((-hx * light.0 - hy * light.1 + light.2) / len).max(0.0);
             let s = ((ambient + (1.0 - ambient) * lit) * tint(height)).clamp(0.0, 1.0);
             if s < 0.12 {
-                continue; // shadow stays dark
+                continue;
             }
             let glyph =
                 RAMP[((s * (RAMP.len() - 1) as f32) as usize).clamp(1, RAMP.len() - 1)] as char;
@@ -417,22 +405,21 @@ fn shade_cells(
     }
 }
 
-/// Unit light vector from components.
+/// Unit vector.
 fn light(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     let l = (x * x + y * y + z * z).sqrt();
     (x / l, y / l, z / l)
 }
 
 impl Hillshade {
-    /// The same evolving terrain as Topographic drift.
+    /// The same terrain as Topographic drift.
     fn height(&self, x: f32, y: f32) -> f32 {
         let unit = self.0.unit;
         let scale = 1.0 / (unit * 0.45);
         fbm3(x * scale + self.0.t * 0.012, y * scale, self.0.t * 0.035)
     }
 
-    /// Shaded relief in ASCII, lit from the upper left as cartographers do; high ground a
-    /// little brighter.
+    /// Shaded relief lit from the upper left; high ground a little brighter.
     fn text(&self, grid: &mut Grid) {
         let unit = self.0.unit;
         let heights = CellHeights::sample(&self.0, |x, y| self.height(x, y));
@@ -447,7 +434,7 @@ impl Hillshade {
         );
     }
 
-    /// Contours over the relief, every 0.1 of height, heavier every 4th.
+    /// Contours every 0.1 of height, heavier every 4th.
     fn frame(&self, out: &mut Vec<Shape>) {
         let Clock { w, h, .. } = self.0;
         let pen = Pen::new(self.0.unit);
@@ -464,15 +451,14 @@ impl Hillshade {
     }
 }
 
-/// atan2 to within 0.004 rad, several times faster than `f32::atan2`; continuous, so it
-/// is safe for phase fields (Dune ripples call it four times per sample).
+/// atan2 to within 0.004 rad, several times faster than `f32::atan2`, and continuous.
 fn fast_atan2(y: f32, x: f32) -> f32 {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
     let (ax, ay) = (x.abs(), y.abs());
     if ax == 0.0 && ay == 0.0 {
         return 0.0;
     }
-    // atan(z) for z in [0, 1]: pi/4 z + 0.273 z (1 - z).
+    // atan(z), z in [0, 1].
     let atan01 = |z: f32| FRAC_PI_4 * z + 0.273 * z * (1.0 - z);
     let a = if ay <= ax {
         atan01(ay / ax)
@@ -487,19 +473,19 @@ fn fast_atan2(y: f32, x: f32) -> f32 {
     }
 }
 
-/// Dune-ripple quantities that change per frame but not per point.
+/// Dune-ripple values that change per frame, not per point.
 struct DuneFrame {
-    /// Ripple wavenumber (radians per px) and the across-wind direction.
+    /// Wavenumber (rad per px) and the across-wind direction.
     k: f32,
     dir: (f32, f32),
-    /// Phase dislocations: position (px) and charge (+1 or -1).
+    /// Dislocations: position (px) and charge (+1 or -1).
     defects: Vec<(f32, f32, f32)>,
 }
 
 impl Dunes {
     fn frame_state(&self) -> DuneFrame {
         let c = &self.0;
-        let wind = 0.5 + 0.1 * (c.t * 0.01).sin(); // crests run across the wind, on a diagonal
+        let wind = 0.5 + 0.1 * (c.t * 0.01).sin(); // crests run across the wind
         let defects = (0..4)
             .map(|i| {
                 let r = |n: u32| rand01(i + 40, n);
@@ -510,29 +496,27 @@ impl Dunes {
             })
             .collect();
         DuneFrame {
-            // Ripple wavelength: 7% of the screen, but at least 70 px, so small scales don't
-            // multiply the crest lines (and their cost).
+            // Wavelength 7% of the screen, at least 70 px (small scales would multiply crests).
             k: TAU / (c.unit * 0.07).max(70.0),
             dir: (wind.cos(), wind.sin()),
             defects,
         }
     }
 
-    /// The slow warp that bends the crests.
+    /// Slow warp that bends the crests.
     fn warp(&self, x: f32, y: f32) -> f32 {
         let unit = self.0.unit;
         4.5 * noise3(x / (unit * 0.55), y / (unit * 0.55), self.0.t * 0.01)
     }
 
-    /// Big, slow dune swells under the ripples.
+    /// Big, slow swells under the ripples.
     fn swell(&self, x: f32, y: f32) -> f32 {
         let unit = self.0.unit;
         15.0 * fbm3(x / (unit * 0.8), y / (unit * 0.8), self.0.t * 0.005)
     }
 
-    /// Ripple phase and its gradient (per px), given the warp there and its gradient.
-    /// Crests run across the wind and migrate downwind; the warp bends them and the
-    /// dislocations make crests split and end.
+    /// Ripple phase and its gradient (per px), given the warp and its gradient. Dislocations
+    /// make crests split and end.
     fn phase(&self, d: &DuneFrame, x: f32, y: f32, warp: (f32, f32, f32)) -> (f32, f32, f32) {
         let (mut f, mut fx, mut fy) = (
             d.k * (x * d.dir.0 + y * d.dir.1) + warp.0 - self.0.t * 0.4,
@@ -549,15 +533,13 @@ impl Dunes {
         (f, fx, fy)
     }
 
-    /// Ripple profile from phase: a gentle windward slope and a steep lee face. Continuous
-    /// across the defects' 2 pi jumps because it only depends on the phase through sines.
+    /// Gentle windward slope, steep lee face; continuous across the dislocations' 2 pi jumps.
     fn ripple(f: f32) -> f32 {
         (f + 0.45 * f.sin()).sin()
     }
 
-    /// Shaded sand in ASCII under a low raking light, like late-afternoon sun. The smooth
-    /// parts (swell, warp) come from per-cell samples; the sharp ripples from their exact
-    /// slope, which the cell spacing is too coarse to difference.
+    /// Sand shaded under a low raking light. Swell and warp come from per-cell samples, the
+    /// sharp ripples from their exact slope.
     fn text(&self, grid: &mut Grid) {
         let d = self.frame_state();
         let swell = CellHeights::sample(&self.0, |x, y| self.swell(x, y));
@@ -583,17 +565,15 @@ impl Dunes {
         );
     }
 
-    /// A fine line along each ripple crest.
+    /// A fine line along each crest.
     fn frame(&self, out: &mut Vec<Shape>) {
         let Clock { w, h, .. } = self.0;
         let pen = Pen::new(self.0.unit);
         let d = self.frame_state();
-        // The warp is smooth (features ~0.5 screen), so a coarse grid interpolates it well.
+        // The warp is smooth, so a coarse grid interpolates it.
         let warp = Field::sample(w, h, pen.px(48.0), |x, y| self.warp(x, y));
-        // Traced a little below the top, where the band is wide enough for the sampling
-        // grid to follow continuously: a thin outline along each crest.
-        // Finer than MIN_CELL: the crest band is about a quarter wavelength wide, and 5 px
-        // still resolves it at the smallest scale.
+        // Traced just below the crest, where the band is wide enough to follow. 5 px still
+        // resolves it at the smallest scale.
         let field = Field::sample(w, h, pen.px(6.0).max(5.0), |x, y| {
             let (f, _, _) = self.phase(&d, x, y, (warp.value_at(x, y), 0.0, 0.0));
             Self::ripple(f)

@@ -1,4 +1,4 @@
-//! Wallpaper window, timer-driven frame loop, and application lifecycle.
+//! Wallpaper window, frame loop and application lifecycle.
 
 use std::ffi::c_void;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -43,18 +43,16 @@ use crate::theme::{self, THEMES};
 use crate::tray;
 
 const TIMER_ID: usize = 1;
-/// A plain WM_TIMER at the frame interval. Modal loops (dragging a scrollbar, moving the
-/// settings window, an open tray menu) run their own message pump, so the waitable timer
-/// below goes unserviced; they still dispatch WM_TIMER, which keeps frames coming.
+/// A plain WM_TIMER at the frame interval: modal loops (scrollbar drags, window moves, the
+/// tray menu) skip our pump and the waitable timer, but still dispatch WM_TIMER.
 const FALLBACK_TIMER_ID: usize = 2;
 const PAUSED_INTERVAL_MS: u32 = 1000;
 
-/// Frame clock. WM_TIMER fires on the ~15.6 ms system tick, so asking for 33 ms gives
-/// ~21 fps; a high-resolution waitable timer (Windows 10 1803+) gives the real rate without
-/// raising the system-wide timer resolution. Older systems fall back to a normal timer.
+/// Frame clock. WM_TIMER rounds to the 15.6 ms system tick; a high-resolution waitable
+/// timer (Windows 10 1803+) gives the real rate. Older systems get a normal one.
 struct FrameTimer {
     handle: HANDLE,
-    /// Window for the fallback WM_TIMER; set once the window exists.
+    /// For the fallback WM_TIMER; set once the window exists.
     window: HWND,
 }
 
@@ -72,9 +70,9 @@ impl FrameTimer {
         }
     }
 
-    /// Fire every `ms` milliseconds, starting `ms` from now.
+    /// Fire every `ms` ms.
     fn set(&self, ms: u32) {
-        let due = -(ms as i64 * 10_000); // negative = relative, in 100 ns units
+        let due = -(ms as i64 * 10_000); // relative, 100 ns units
                                          // SAFETY: `due` outlives the call; no completion routine.
         unsafe {
             let _ = SetWaitableTimer(self.handle, &due, ms as i32, None, None, false);
@@ -107,16 +105,16 @@ struct App {
     seed: u64,
     last_frame: Instant,
     last_power_check: Instant,
-    /// When our own message loop last ran; stale means a modal loop has taken over.
+    /// When our message loop last ran; stale means a modal loop has the thread.
     last_pump: Instant,
-    /// Config file mtime at last load; a change triggers a reload.
+    /// Config file mtime at last load.
     config_mtime: Option<SystemTime>,
     user_paused: bool,
     /// Why the wallpaper paused itself, if it did.
     auto_paused: Option<&'static str>,
-    /// The tray window, for status updates; invalid until it exists.
+    /// Tray window for status updates; invalid until created.
     tray: HWND,
-    /// Time and date last shown, when the clock is on.
+    /// Time and date last shown.
     clock: Option<[String; 2]>,
 }
 
@@ -125,7 +123,7 @@ impl App {
         self.user_paused || self.auto_paused.is_some()
     }
 
-    /// True while a modal loop owns the thread (see `FALLBACK_TIMER_ID`).
+    /// True while a modal loop owns the thread.
     fn pump_stalled(&self) -> bool {
         self.last_pump.elapsed().as_millis() > 2 * self.interval_ms() as u128 + 50
     }
@@ -168,7 +166,7 @@ impl App {
         self.render_frame();
     }
 
-    /// Capture the animation's current frame: grid cells plus vector shapes.
+    /// Capture the current frame: grid cells and shapes.
     fn render_frame(&mut self) {
         self.anim.render(&mut self.grid);
         self.clock = self.cfg.general.clock.then(local_clock);
@@ -177,7 +175,7 @@ impl App {
         self.anim.draw(&mut self.shapes);
     }
 
-    /// New renderer for the current font and overall scale, then re-lay out the frame.
+    /// New renderer for the font and overall scale, then re-lay out.
     fn rebuild_renderer(&mut self) {
         let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
         match Renderer::new(
@@ -194,7 +192,7 @@ impl App {
         self.resize(self.width, self.height);
     }
 
-    /// A settings value as the settings window shows it (see `settings::WM_GET_TWEAK`).
+    /// A setting as the settings window shows it.
     fn tweak_value(&self, id: usize) -> f32 {
         let g = &self.cfg.general;
         match id {
@@ -208,7 +206,7 @@ impl App {
         }
     }
 
-    /// Apply a settings value live; with `commit`, also save it to the config.
+    /// Apply a setting live; with `commit`, save it too.
     fn tweak(&mut self, id: usize, value: f32, commit: bool) {
         match id {
             settings::SPEED => {
@@ -235,7 +233,7 @@ impl App {
                 let scale = value.clamp(0.5, 2.0);
                 if scale != self.cfg.general.scale {
                     self.cfg.general.scale = scale;
-                    self.rebuild_renderer(); // the font size follows the overall scale
+                    self.rebuild_renderer(); // the font size follows the scale
                 }
                 if commit {
                     save("general", "scale", decimal(scale));
@@ -262,15 +260,14 @@ impl App {
         }
     }
 
-    /// Push the current theme's colors (warm or cool, per animation) to the renderer.
+    /// Push the theme's colors (warm or cool, per animation) to the renderer.
     fn apply_colors(&mut self) {
         let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
         let stops = if self.anim.warm() { &t.warm } else { &t.cool };
         self.renderer.set_colors(t.bg, stops, self.cfg.theme.glass);
     }
 
-    /// Reload the config if the file changed (hand edits, or our own tray saves), applying
-    /// only what differs so an unchanged animation keeps running. Returns true if reloaded.
+    /// Reload the config if the file changed, applying only what differs. True if reloaded.
     fn reload_if_changed(&mut self) -> bool {
         let mtime = config::modified();
         if mtime == self.config_mtime {
@@ -309,13 +306,13 @@ impl App {
             self.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
         }
         if new_font || new_anim || old.general.object_scale != self.cfg.general.object_scale {
-            self.resize(self.width, self.height); // new cell size and/or fresh animation
+            self.resize(self.width, self.height); // new cell size or animation
         }
         self.apply_colors();
         true
     }
 
-    /// Re-evaluate pause state; returns true if the timer interval needs to change.
+    /// Re-evaluate pausing; true if the timer interval must change.
     fn refresh_pause(&mut self) -> bool {
         if self.last_power_check.elapsed().as_secs() < 1 {
             return false;
@@ -334,7 +331,7 @@ impl App {
         self.paused() != before
     }
 
-    /// Show the current animation and theme, or why it's paused, on the tray icon.
+    /// Tray hover text: animation and theme, or why it's paused.
     fn update_tray(&self) {
         let tip = if self.user_paused {
             "Glyphdrift: paused".to_string()
@@ -349,8 +346,8 @@ impl App {
     }
 }
 
-/// SAFETY contract: the pointer in GWLP_USERDATA is the `Box<App>` leaked in `run`, and
-/// is only touched from the window's own thread, one message at a time.
+/// SAFETY contract: GWLP_USERDATA holds the `Box<App>` leaked in `run`, used only on
+/// the window's thread.
 unsafe fn app_of<'a>(hwnd: HWND) -> Option<&'a mut App> {
     (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App).as_mut()
 }
@@ -374,7 +371,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     && app_of(hwnd).is_some_and(|a| a.pump_stalled())) =>
         {
             if let Some(app) = app_of(hwnd) {
-                // Explorer restarted and our parent died: re-attach.
+                // Explorer restarted: re-attach.
                 if !IsWindow(app.parent).as_bool() {
                     if let Ok(parent) = desktop::find_wallpaper_parent() {
                         app.parent = parent;
@@ -382,7 +379,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         on_display_change(hwnd, app);
                     }
                 }
-                // Once a second: pick up config edits, then re-check auto-pause.
+                // Once a second: config edits, then auto-pause.
                 let reloaded =
                     app.last_power_check.elapsed().as_secs() >= 1 && app.reload_if_changed();
                 if reloaded {
@@ -394,7 +391,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.timer.set(app.interval_ms());
                 }
                 if app.paused() {
-                    // Keep the clock current while paused (ticks are 1 s apart here).
+                    // Keep the clock current while paused.
                     if app.cfg.general.clock && app.clock != Some(local_clock()) {
                         app.render_frame();
                         let _ = InvalidateRect(hwnd, None, BOOL(0));
@@ -420,7 +417,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
-        WM_ERASEBKGND => LRESULT(1), // we paint every pixel ourselves
+        WM_ERASEBKGND => LRESULT(1), // we paint every pixel
         WM_DISPLAYCHANGE => {
             if let Some(app) = app_of(hwnd) {
                 on_display_change(hwnd, app);
@@ -438,7 +435,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if let (Some(app), Some(&(name, ..))) = (app_of(hwnd), anim::ANIMATIONS.get(wp.0)) {
                 app.cfg.general.animation = name.into();
                 app.anim = anim::by_name(name, &app.cfg.theme.ramp);
-                app.resize(app.width, app.height); // re-inits and renders a first frame
+                app.resize(app.width, app.height); // re-inits and renders
                 app.apply_colors();
                 app.timer.set(app.interval_ms()); // frame rate may differ
                 save("general", "animation", name);
@@ -492,28 +489,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
-/// The configured font size is in pixels at 100% display scaling; scale it by the system DPI
-/// so ASCII animations keep their proportions on high-DPI screens.
+/// Font size in px at 100% scaling, scaled by system DPI.
 fn font_px(size: i32) -> i32 {
-    // SAFETY: no preconditions; returns 96 at 100% scaling.
+    // SAFETY: no preconditions.
     let dpi = unsafe { GetDpiForSystem() }.max(96);
     (size as f32 * dpi as f32 / 96.0).round() as i32
 }
 
-/// The renderer's font size: DPI-scaled, times the overall scale setting.
+/// The renderer's font size: DPI-scaled, times the overall scale.
 fn font_size(cfg: &Config) -> i32 {
     (font_px(cfg.font.size) as f32 * cfg.general.scale)
         .round()
         .max(4.0) as i32
 }
 
-/// A setting as it should appear in the config: 3 decimals, not the f32-to-f64 artifact
-/// (0.3 would otherwise be saved as 0.30000001192092896).
+/// Rounded to 3 decimals for the config (0.3f32 would save as 0.30000001192092896).
 fn decimal(v: f32) -> f64 {
     (v as f64 * 1000.0).round() / 1000.0
 }
 
-/// Persist a tray choice; failure only costs the setting surviving a restart.
+/// Save a setting; a failure only loses it on restart.
 fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
     if let Err(e) = config::save(section, key, value) {
         log!("config: could not save {section}.{key}: {e}");
@@ -525,7 +520,7 @@ unsafe fn on_display_change(hwnd: HWND, app: &App) {
 }
 
 pub fn run() -> Result<()> {
-    // SAFETY: called once at startup before any window exists.
+    // SAFETY: once, before any window exists.
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
@@ -556,8 +551,8 @@ pub fn run() -> Result<()> {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
 
-    // SAFETY: Win32 window creation; `app_ptr` is reclaimed with Box::from_raw on every
-    // exit path below, after the message loop (and thus all wndproc calls) has finished.
+    // SAFETY: Win32 window creation; `app_ptr` is reclaimed after the message loop, when no
+    // more wndproc calls can happen.
     unsafe {
         let parent = desktop::find_wallpaper_parent()?;
         let now = Instant::now();
@@ -597,7 +592,7 @@ pub fn run() -> Result<()> {
 
             let (x, y, w, h) = desktop::rect_in_parent(parent);
             let hwnd = CreateWindowExW(
-                // Layered: required to render under a WS_EX_NOREDIRECTIONBITMAP Progman.
+                // Layered: required under a WS_EX_NOREDIRECTIONBITMAP Progman.
                 WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 class,
                 w!("Glyphdrift"),
@@ -618,8 +613,7 @@ pub fn run() -> Result<()> {
             (*app_ptr).tray = tray;
             (*app_ptr).update_tray();
             if first_run {
-                // New users otherwise see the wallpaper change with no hint where the
-                // controls are; the icon may also be tucked away in the tray overflow.
+                // Show new users where the controls are.
                 tray::notify(
                     tray,
                     "Glyphdrift is running",
@@ -631,8 +625,7 @@ pub fn run() -> Result<()> {
             (*app_ptr).timer.window = hwnd;
             (*app_ptr).timer.set((*app_ptr).interval_ms());
 
-            // Wait for either a frame tick or window messages. A tick is delivered as the
-            // WM_TIMER the window procedure already handles.
+            // Wait for a frame tick or messages; ticks arrive as WM_TIMER.
             let timer = (*app_ptr).timer.handle;
             let mut msg = MSG::default();
             'pump: loop {
@@ -650,7 +643,7 @@ pub fn run() -> Result<()> {
                     if msg.message == WM_QUIT {
                         break 'pump;
                     }
-                    // Tab / arrow / Esc navigation for the settings window's controls.
+                    // Keyboard navigation in the settings window.
                     let dialog = settings::window();
                     if !dialog.is_invalid() && IsDialogMessageW(dialog, &msg).as_bool() {
                         continue;
@@ -668,7 +661,7 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Tell an open settings window to re-read the settings (after a change from the tray).
+/// Ask an open settings window to re-read the settings.
 fn refresh_settings() {
     let window = settings::window();
     if !window.is_invalid() {
@@ -677,11 +670,9 @@ fn refresh_settings() {
     }
 }
 
-/// True for the first running copy. A second launch asks the first to open its settings
-/// window (so "run it again" does something visible) and should then exit.
+/// True for the first running copy; a second launch opens the first one's settings.
 fn first_instance() -> bool {
-    // SAFETY: plain Win32 calls with constant strings. The mutex handle is deliberately
-    // never closed: it marks this process as running until it exits.
+    // SAFETY: constant strings. The mutex is never closed: it marks the process running.
     unsafe {
         let mutex = CreateMutexW(None, false, w!("Local\\Glyphdrift"));
         if mutex.is_ok() && GetLastError() != ERROR_ALREADY_EXISTS {
@@ -690,30 +681,29 @@ fn first_instance() -> bool {
         if let Ok(tray) = FindWindowW(w!("GlyphdriftTray"), None) {
             let mut pid = 0;
             GetWindowThreadProcessId(tray, Some(&mut pid));
-            let _ = AllowSetForegroundWindow(pid); // let it bring the settings window forward
+            let _ = AllowSetForegroundWindow(pid); // so it can come to the front
             let _ = PostMessageW(tray, tray::WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
         }
         false
     }
 }
 
-/// The local time (no seconds) and long date, in the user's regional format.
+/// Local time (no seconds) and long date, in the user's format.
 fn local_clock() -> [String; 2] {
     let (mut time, mut date) = ([0u16; 64], [0u16; 128]);
-    // SAFETY: the buffers are live locals; null locale/time/format mean the user's
-    // default locale, the current time and the locale's own format.
+    // SAFETY: live local buffers; nulls mean user locale, current time, locale format.
     let (t, d) = unsafe {
         (
             GetTimeFormatEx(None, TIME_NOSECONDS, None, None, Some(&mut time)),
             GetDateFormatEx(None, DATE_LONGDATE, None, None, Some(&mut date), None),
         )
     };
-    // Lengths include the terminating NUL; 0 means failure.
+    // Lengths include the NUL; 0 means failure.
     let text = |buf: &[u16], n: i32| String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize]);
     [text(&time, t), text(&date, d)]
 }
 
-/// Show a fatal error. Release builds have no console, so use a message box.
+/// Fatal error as a message box (release builds have no console).
 pub fn fatal(text: &str) {
     crate::log::write(&format!("fatal: {text}"));
     let body: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();

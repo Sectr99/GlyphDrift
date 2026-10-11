@@ -1,9 +1,7 @@
-//! Glyphdrift: a live wallpaper for Windows.
-//!
-//! Portable core (`grid`, `anim`, `config`, `theme`, `icon`, `shape`) builds and tests on any platform.
-//! Windows-only host code (`desktop`, `render`, `tray`, `settings`, `power`, `autostart`, `log`, `app`) is cfg-gated.
+//! Glyphdrift: a live wallpaper for Windows. The portable core builds and tests anywhere;
+//! Windows host code is cfg-gated.
 
-/// `log!(...)`: like `eprintln!`, but also appended to the log file (see `log`).
+/// `log!(...)`: `eprintln!` that also appends to the log file.
 #[cfg(windows)]
 macro_rules! log {
     ($($t:tt)*) => { $crate::log::write(&format!($($t)*)) };

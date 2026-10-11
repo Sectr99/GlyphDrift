@@ -1,9 +1,6 @@
-//! Notification-area icon. Left-click opens the settings window; the right-click menu keeps
-//! the quick actions: Settings, Animation, Show clock, Start with Windows, Pause and Quit.
-//! While the wallpaper is paused the icon turns grey and its hover text says why.
-//!
-//! Uses its own hidden top-level window: the wallpaper window is a child of WorkerW and
-//! cannot reliably take foreground focus, which popup menus require.
+//! Tray icon: left-click opens settings, right-click shows quick actions. The icon turns
+//! grey while paused, and its hover text says why. It has its own hidden window because
+//! the wallpaper window can't reliably take the focus popup menus need.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -25,35 +22,34 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
 };
 
-/// Posted to the wallpaper window when the user picks Pause/Resume.
+/// To the wallpaper: Pause/Resume.
 pub const WM_TOGGLE_PAUSE: u32 = WM_APP + 2;
 const WM_TRAY: u32 = WM_APP + 1;
-/// Posted to the tray window (by a second launch) to open the settings window.
+/// To the tray window, from a second launch: open settings.
 pub const WM_OPEN_SETTINGS: u32 = WM_APP + 11;
 const ID_PAUSE: usize = 1;
-/// Posted to the wallpaper window with WPARAM = index into `anim::ANIMATIONS`.
+/// To the wallpaper: WPARAM = index into `anim::ANIMATIONS`.
 pub const WM_SET_ANIMATION: u32 = WM_APP + 3;
-/// Posted to the wallpaper window with WPARAM = index into `theme::THEMES`.
+/// To the wallpaper: WPARAM = index into `theme::THEMES`.
 pub const WM_SET_THEME: u32 = WM_APP + 4;
-/// Sent to the wallpaper window; returns `pack_state` of the current selections.
+/// To the wallpaper; returns `pack_state`.
 pub const WM_GET_STATE: u32 = WM_APP + 5;
 const ID_QUIT: usize = 2;
 const ID_AUTOSTART: usize = 3;
 const ID_SETTINGS: usize = 4;
 const ID_CLOCK: usize = 5;
 const ID_ANIM_BASE: usize = 100;
-/// The WM_GET_STATE result: animation index in the low byte, theme index in the next.
+/// Animation index in the low byte, theme index in the next.
 pub fn pack_state(anim: usize, theme: usize) -> isize {
     ((anim & 0xFF) | (theme & 0xFF) << 8) as isize
 }
 
-/// The animation and theme indices from a WM_GET_STATE result.
+/// Inverse of `pack_state`.
 pub fn unpack_state(v: isize) -> (usize, usize) {
     (v as usize & 0xFF, (v as usize >> 8) & 0xFF)
 }
 
-/// Submenu of radio items `base + i`, with `checked` marked. Each item is (label, group);
-/// a separator goes wherever the group changes.
+/// Radio submenu of items `base + i`, `checked` marked; separators between groups.
 unsafe fn radio_submenu<'a>(
     items: impl Iterator<Item = (&'a str, &'a str)>,
     base: usize,
@@ -81,28 +77,26 @@ unsafe fn radio_submenu<'a>(
     Some(sub)
 }
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
-/// The tray HICONs (normal and paused), created in `create` and destroyed in `destroy`;
-/// 0 = stock icon.
+/// Tray icons, normal and paused; 0 = stock icon.
 static ICON: AtomicIsize = AtomicIsize::new(0);
 static ICON_PAUSED: AtomicIsize = AtomicIsize::new(0);
-/// Hover text and paused state, kept so the icon can be re-added after Explorer restarts.
+/// Hover text and paused state, for re-adding the icon after Explorer restarts.
 static TIP: Mutex<String> = Mutex::new(String::new());
 static PAUSED: AtomicBool = AtomicBool::new(false);
-/// Paused from the menu (the item then reads Resume) rather than automatically.
+/// Paused from the menu (it then offers Resume), not automatically.
 static USER_PAUSED: AtomicBool = AtomicBool::new(false);
 
-/// White, like the stock notification-area icons; grey while paused.
+/// White like the stock icons; grey while paused.
 const ICON_RGB: (u8, u8, u8) = (0xff, 0xff, 0xff);
 const ICON_PAUSED_RGB: (u8, u8, u8) = (0x80, 0x80, 0x80);
 
-/// Rasterize the icon at the small-icon size (DPI-scaled) into a 32-bit alpha HICON.
+/// The icon at the small-icon size, as a 32-bit alpha HICON.
 unsafe fn make_icon(rgb: (u8, u8, u8)) -> HICON {
     let n = GetSystemMetrics(SM_CXSMICON).clamp(16, 256) as usize;
     let bgra = crate::icon::bgra(n, rgb);
-    // 1-bpp AND mask, rows padded to 16 bits; all zero so the alpha channel decides.
+    // All-zero AND mask (rows padded to 16 bits): alpha decides.
     let mask = vec![0u8; n.div_ceil(16) * 2 * n];
-    // SAFETY: `bgra` holds n*n 32-bit pixels and `mask` n rows of WORD-aligned 1-bpp bits,
-    // the sizes CreateIcon reads for an n x n, 1-plane, 32-bpp icon.
+    // SAFETY: `bgra` and `mask` have the sizes CreateIcon reads for an n x n 32-bpp icon.
     CreateIcon(
         None,
         n as i32,
@@ -115,10 +109,9 @@ unsafe fn make_icon(rgb: (u8, u8, u8)) -> HICON {
     .unwrap_or_default()
 }
 
-/// Create the tray window + icon. `wallpaper` receives WM_TOGGLE_PAUSE / WM_CLOSE.
+/// Create the tray window and icon; `wallpaper` receives its messages.
 pub fn create(wallpaper: HWND) -> Result<HWND> {
-    // SAFETY: standard window-class registration and creation; `wallpaper` is stored as
-    // an integer and only used as a PostMessage target.
+    // SAFETY: window creation; `wallpaper` is only used as a PostMessage target.
     unsafe {
         let hinst = GetModuleHandleW(None)?;
         let class = w!("GlyphdriftTray");
@@ -128,7 +121,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
             lpszClassName: class,
             ..Default::default()
         };
-        RegisterClassW(&wc); // already-registered on a second call is fine
+        RegisterClassW(&wc); // fails harmlessly if already registered
         TASKBAR_CREATED.store(
             RegisterWindowMessageW(w!("TaskbarCreated")),
             Ordering::Relaxed,
@@ -194,7 +187,7 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     } else {
         tip
     };
-    // Leave the last slot as the terminating NUL.
+    // Keep the terminating NUL.
     let room = nid.szTip.len() - 1;
     for (dst, src) in nid.szTip[..room].iter_mut().zip(tip.encode_utf16()) {
         *dst = src;
@@ -202,8 +195,7 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     nid
 }
 
-/// Show a one-off notification from the tray icon (Windows shows it as a toast).
-/// Clicking it opens the settings window.
+/// One-off notification (a toast); clicking it opens settings.
 pub fn notify(tray: HWND, title: &str, text: &str) {
     // SAFETY: `tray` is the window from `create`; the struct outlives the call.
     unsafe {
@@ -211,7 +203,7 @@ pub fn notify(tray: HWND, title: &str, text: &str) {
         nid.uFlags = NIF_INFO;
         nid.dwInfoFlags = NIIF_INFO;
         let fill = |dst: &mut [u16], s: &str| {
-            let room = dst.len() - 1; // keep the terminating NUL
+            let room = dst.len() - 1;
             for (d, c) in dst[..room].iter_mut().zip(s.encode_utf16()) {
                 *d = c;
             }
@@ -222,8 +214,7 @@ pub fn notify(tray: HWND, title: &str, text: &str) {
     }
 }
 
-/// Update the icon's hover text and paused look (grey icon; the menu offers Resume when
-/// `user_paused`). Does nothing if neither changed.
+/// Update hover text and paused look; no-op if unchanged.
 pub fn set_status(tray: HWND, tip: &str, paused: bool, user_paused: bool) {
     USER_PAUSED.store(user_paused, Ordering::Relaxed);
     let Ok(mut current) = TIP.lock() else {
@@ -307,7 +298,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit"));
                 let mut pt = Default::default();
                 let _ = GetCursorPos(&mut pt);
-                let _ = SetForegroundWindow(hwnd); // required or the menu never dismisses
+                let _ = SetForegroundWindow(hwnd); // or the menu never dismisses
                 let cmd = TrackPopupMenu(
                     menu,
                     TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -317,14 +308,14 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     hwnd,
                     None,
                 );
-                let _ = DestroyMenu(menu); // also destroys the submenus
+                let _ = DestroyMenu(menu); // and its submenus
                 match cmd.0 as usize {
                     ID_PAUSE => {
                         let _ = PostMessageW(target, WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
                     }
                     ID_SETTINGS => crate::settings::open(target),
                     ID_CLOCK => {
-                        // Toggle and save: WM_TWEAK with commit, value 0 or 1000 (1.0).
+                        // Toggle and save (value 0 or 1000).
                         let _ = PostMessageW(
                             target,
                             crate::settings::WM_TWEAK,
@@ -355,7 +346,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         WM_DESTROY => LRESULT(0),
         m if m != 0 && m == TASKBAR_CREATED.load(Ordering::Relaxed) => {
-            // Explorer restarted; our icon vanished with it.
+            // Explorer restarted; re-add the icon.
             add_icon(hwnd);
             LRESULT(0)
         }

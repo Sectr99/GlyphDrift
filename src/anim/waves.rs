@@ -1,11 +1,11 @@
-//! Gentle ocean swell in perspective: thin crests far away, broad ones rolling closer.
+//! Ocean swell in perspective: thin crests far away, broad ones closer.
 
 use std::f32::consts::TAU;
 
 use super::{rng::hash3, Animation, Size};
 use crate::grid::{Cell, Grid};
 
-/// Horizon position as a fraction of screen height; above it is empty sky.
+/// Horizon as a fraction of screen height.
 const HORIZON: f32 = 0.35;
 
 pub struct Waves {
@@ -30,7 +30,7 @@ impl Animation for Waves {
     }
 
     fn init(&mut self, _size: Size, seed: u64) {
-        // Seed only offsets the phase, so restarts don't all look identical.
+        // The seed only offsets the phase.
         self.t = (seed % 1000) as f32;
     }
 
@@ -44,25 +44,25 @@ impl Animation for Waves {
         let horizon = rows * HORIZON;
         let t = self.t;
         for y in (horizon.ceil() as usize)..grid.rows() {
-            // d: 0 at the horizon, 1 at the bottom edge. z: distance from the viewer.
+            // d: 0 at the horizon, 1 at the bottom. z: distance.
             let d = (y as f32 - horizon + 1.0) / (rows - horizon);
             let z = 4.0 / (d + 0.12);
-            // Swell: a band of brightness rolling toward the viewer.
+            // A band of brightness rolling toward the viewer.
             let swell = 0.5 + 0.5 * (z * 1.4 + t * 0.9).sin();
-            // Each row drifts on its own: random phase, slow speed, alternating direction.
+            // Each row drifts on its own.
             let h = hash3(y as u32, 0, 0);
             let phase = (h & 0xFFFF) as f32 / 65536.0 * TAU;
             let drift = (0.3 + ((h >> 16) & 0xFF) as f32 / 255.0 * 0.5)
                 * if h >> 63 == 0 { 1.0 } else { -1.0 };
-            let freq = 0.9 / (1.0 + 6.0 * d); // short dashes far away, long ones up close
+            let freq = 0.9 / (1.0 + 6.0 * d); // short dashes far, long ones near
             for x in 0..grid.cols() {
                 let xf = x as f32 * freq;
-                // The nested sine varies dash spacing so rows don't look machine-made.
+                // The nested sine varies dash spacing.
                 let w = (xf + phase + t * drift + 1.5 * (xf * 0.29 + phase * 2.0).sin()).sin();
                 if w < 0.75 {
                     continue;
                 }
-                let s = (w - 0.75) / 0.25; // dash strength 0..1, peaks mid-dash
+                let s = (w - 0.75) / 0.25; // dash strength 0..1
                 let ch = if s > 0.6 {
                     '~'
                 } else if s > 0.25 {

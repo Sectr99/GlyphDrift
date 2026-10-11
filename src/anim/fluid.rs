@@ -1,5 +1,4 @@
-//! Fluid animations: a lava lamp (metaballs), topographic drift (contours of evolving
-//! noise terrain), and ink in water (a stable-fluids simulation rendered as ASCII).
+//! Fluid animations: lava lamp (metaballs), topographic drift and ink in water.
 
 use std::f32::consts::TAU;
 
@@ -17,11 +16,10 @@ fn rand01(a: u32, b: u32) -> f32 {
 // ---------------------------------------------------------------------------------------
 // Lava lamp
 
-/// Blobs per primary-monitor area (a 1.6:1 screen gets about seven).
+/// Blobs per 1.6:1 primary-monitor area.
 const BLOBS_PER_SCREEN: f32 = 7.0;
 
-/// Soft metaball blobs that rise, merge and split on slow, staggered cycles: a glowing
-/// halftone core, a crisp contour at the blob edge and a faint halo line around it.
+/// Metaballs that rise, merge and split: a halftone core, an edge contour and a halo.
 #[derive(Default)]
 pub struct LavaLamp {
     t: f32,
@@ -36,7 +34,7 @@ impl LavaLamp {
         Self::default()
     }
 
-    /// Blob centers and radii (px) at the current time.
+    /// Blob centers and radii (px) now.
     fn blobs(&self) -> Vec<(f32, f32, f32)> {
         let unit = self.unit;
         let count = (self.w * self.h / (unit * unit * 1.6) * BLOBS_PER_SCREEN)
@@ -45,7 +43,7 @@ impl LavaLamp {
         (0..count)
             .map(|i| {
                 let r = |k: u32| rand01(i, k);
-                let speed = 0.05 + 0.07 * r(1); // each blob has its own rise-and-sink cycle
+                let speed = 0.05 + 0.07 * r(1); // own rise-and-sink cycle
                 let x = self.w * (0.15 + 0.7 * r(2))
                     + self.w * 0.06 * (self.t * (0.05 + 0.04 * r(3)) + TAU * r(4)).sin();
                 let y = self.h * (0.5 + 0.4 * (self.t * speed + TAU * r(5)).sin());
@@ -65,7 +63,7 @@ impl Animation for LavaLamp {
         true
     }
     fn fps(&self) -> u32 {
-        20 // slow drift; drawing is the expensive part, so fewer frames save the most
+        20 // slow drift: fewer frames save the most
     }
     fn init(&mut self, size: Size, seed: u64) {
         (self.w, self.h, self.unit) = (size.width, size.height, size.focus.unit().max(1.0));
@@ -77,15 +75,15 @@ impl Animation for LavaLamp {
     fn draw(&self, out: &mut Vec<Shape>) {
         let pen = Pen::new(self.unit);
         let blobs = self.blobs();
-        // Metaball field: 1.0 at a lone blob's radius, larger inside, merging smoothly.
+        // 1.0 at a lone blob's radius, larger inside.
         let field = |x: f32, y: f32| {
             blobs
                 .iter()
                 .map(|&(bx, by, r)| r * r / ((x - bx).powi(2) + (y - by).powi(2) + 1.0))
                 .sum::<f32>()
         };
-        // Glowing core: halftone dots that grow toward the center of each mass. Each dot is
-        // a draw call, so the spacing has the same floor as contour grids.
+        // Halftone core, dots growing toward each mass's center. One draw call per dot,
+        // hence the spacing floor.
         let step = pen.px(10.0).max(MIN_CELL);
         let (nx, ny) = (
             (self.w / step) as i32 + 1,
@@ -102,13 +100,13 @@ impl Animation for LavaLamp {
                 let glow = ((f - 1.0) / 2.5).clamp(0.0, 1.0);
                 out.push(Shape::Circle {
                     c: (x, y),
-                    r: step * (0.16 + 0.24 * glow.sqrt()), // capped below touching, so cores keep texture
+                    r: step * (0.16 + 0.24 * glow.sqrt()), // capped below touching
                     fill: true,
                     level: (90.0 + 150.0 * glow) as u8,
                 });
             }
         }
-        // Edge and halo contours.
+        // Edge and halo.
         let grid = Field::sample(self.w, self.h, pen.px(9.0).max(MIN_CELL), field);
         for (level, weight, brightness) in [(1.0, MID, 210), (0.62, HAIR, 70)] {
             grid.contour(level, |a, b| {
@@ -126,10 +124,8 @@ impl Animation for LavaLamp {
 // ---------------------------------------------------------------------------------------
 // Topographic drift
 
-/// Contour lines over slowly evolving noise terrain. Every fifth line is a heavier index
-/// contour, as on a survey map; higher ground is brighter. With a clock, the terrain is
-/// warped around a box at the primary monitor's center, so the lines flow around it the way
-/// streamlines pass an obstacle.
+/// Contours over evolving noise terrain, heavier every fifth line. With the clock on, the
+/// terrain is warped around a central box so the lines flow around it.
 #[derive(Default)]
 pub struct Topographic {
     t: f32,
@@ -149,16 +145,15 @@ impl Topographic {
         Self::default()
     }
 
-    /// Where terrain point (x, y) is sampled from: with the clock on, points outside the box
-    /// are pulled toward its center (fully at the edge, fading out with distance), and
-    /// points inside return None. Without the clock, the identity.
+    /// Where (x, y) samples the terrain: outside the clock box, pulled toward its center
+    /// (fully at the edge, fading with distance); inside, None. Identity without the clock.
     fn warp(&self, x: f32, y: f32) -> Option<(f32, f32)> {
         if self.clock.is_none() {
             return Some((x, y));
         }
         let (qx, qy) = (x - self.center.0, y - self.center.1);
         let (ux, uy) = (qx / self.half.0, qy / self.half.1);
-        // Superellipse "radius": 1 on a rounded-rectangle boundary.
+        // Superellipse radius: 1 on the rounded-box boundary.
         let rho = (ux.powi(4) + uy.powi(4)).sqrt().sqrt();
         if rho <= 1.0 {
             return None;
@@ -173,7 +168,7 @@ impl Animation for Topographic {
         "topo"
     }
     fn fps(&self) -> u32 {
-        20 // slow drift; drawing is the expensive part, so fewer frames save the most
+        20 // slow drift: fewer frames save the most
     }
     fn init(&mut self, size: Size, seed: u64) {
         let f = size.focus;
@@ -192,13 +187,13 @@ impl Animation for Topographic {
         }
     }
     fn draw(&self, out: &mut Vec<Shape>) {
-        const LEVELS: i32 = 16; // contour interval: 1/LEVELS of the height range per side
+        const LEVELS: i32 = 16; // contour interval: 1/LEVELS of the range per side
         let unit = self.unit;
         let pen = Pen::new(unit);
         let (scale, drift, morph) = (1.0 / (unit * 0.45), self.t * 0.012, self.t * 0.035);
         let height = |x: f32, y: f32| fbm3(x * scale + drift, y * scale, morph);
         let (cx, cy) = self.center;
-        let inside = height(cx, cy); // flat inside the box: no lines cross it
+        let inside = height(cx, cy); // flat inside the box, so no lines cross it
         let grid = Field::sample(
             self.w,
             self.h,
@@ -208,11 +203,11 @@ impl Animation for Topographic {
                 None => inside,
             },
         );
-        // (level, width, brightness) per contour, lowest first.
+        // (level, width, brightness), lowest first.
         let styles: Vec<(f32, f32, u8)> = (-LEVELS..=LEVELS)
             .map(|k| {
                 let level = k as f32 / LEVELS as f32 * 0.8;
-                let index = k % 5 == 0; // heavier index contour
+                let index = k % 5 == 0;
                 let height = (level / 0.8 + 1.0) / 2.0; // 0 low .. 1 high
                 let brightness =
                     (40.0 + 150.0 * height + if index { 40.0 } else { 0.0 }).min(255.0) as u8;
@@ -229,7 +224,7 @@ impl Animation for Topographic {
         }
         if let Some([time, date]) = &self.clock {
             let (hw, hh) = self.half;
-            // Corner brackets: a survey-map frame, inset inside the rounded boundary.
+            // Corner brackets inside the rounded boundary.
             let (bx, by, arm) = (hw * 0.8, hh * 0.78, hh * 0.22);
             for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
                 let corner = (cx + sx * bx, cy + sy * by);
@@ -266,20 +261,18 @@ impl Animation for Topographic {
 // ---------------------------------------------------------------------------------------
 // Ink in water
 
-const STEP: f32 = 1.0 / 30.0; // fixed simulation step
+const STEP: f32 = 1.0 / 30.0;
 const JACOBI: usize = 20; // pressure solver iterations
 const EMITTERS: u32 = 4;
-/// Simulation width cap (cells): keeps the solver cheap on large screens; the grid is
-/// sampled smoothly onto however many characters the screen has.
+/// Simulation width cap (cells), sampled up to the character grid.
 const MAX_SIM_W: usize = 200;
 const RAMP: &[u8] = b" .,:-=+*#%@";
 
-/// Ink in water: Jos Stam's stable fluids (semi-Lagrangian advection and a pressure
-/// projection) on a periodic grid with square cells, twice the character rows. Wandering
-/// nozzles inject dye and swirling force; the dye is carried along, curls and slowly fades.
+/// Jos Stam's stable fluids on a periodic grid with square cells. Wandering nozzles add
+/// dye and swirl; the dye curls and slowly fades.
 #[derive(Default)]
 pub struct Ink {
-    /// Simulation grid size (square cells).
+    /// Simulation grid size.
     w: usize,
     h: usize,
     /// Character grid size.
@@ -303,11 +296,11 @@ impl Ink {
         (j.rem_euclid(h) * w + i.rem_euclid(w)) as usize
     }
 
-    /// Bilinear sample of `f` at fractional cell (x, y), wrapping around the edges.
+    /// Bilinear sample of `f` at fractional cell (x, y), wrapping.
     fn sample(&self, f: &[f32], x: f32, y: f32) -> f32 {
         let (x0, y0) = (x.floor(), y.floor());
         let (fx, fy) = (x - x0, y - y0);
-        // Wrap once per axis (division is the expensive part), then step to the neighbor.
+        // Wrap once per axis; division is the expensive part.
         let i0 = (x0 as isize).rem_euclid(self.w as isize) as usize;
         let j0 = (y0 as isize).rem_euclid(self.h as isize) as usize;
         let i1 = if i0 + 1 == self.w { 0 } else { i0 + 1 };
@@ -324,7 +317,7 @@ impl Ink {
         a + (b - a) * fy
     }
 
-    /// Carry field `f` along the velocity for one step (trace back and sample).
+    /// Carry `f` along the velocity for one step.
     fn advect(&self, f: &[f32], out: &mut [f32]) {
         for j in 0..self.h {
             for i in 0..self.w {
@@ -338,7 +331,7 @@ impl Ink {
         }
     }
 
-    /// Make the velocity divergence-free (incompressible), Jacobi-solving for pressure.
+    /// Make the velocity divergence-free (Jacobi pressure solve).
     fn project(&mut self) {
         let (w, h) = (self.w, self.h);
         let n = w * h;
@@ -347,7 +340,7 @@ impl Ink {
         p.clear();
         p.resize(n, 0.0);
         tmp.resize(n, 0.0);
-        // Wrapped neighbors, worked out once: left/right columns and up/down row offsets.
+        // Wrapped neighbor indices, computed once.
         let left: Vec<usize> = (0..w).map(|i| (i + w - 1) % w).collect();
         let right: Vec<usize> = (0..w).map(|i| (i + 1) % w).collect();
         let up: Vec<usize> = (0..h).map(|j| (j + h - 1) % h * w).collect();
@@ -386,10 +379,10 @@ impl Ink {
     fn step(&mut self) {
         self.t += STEP;
         let (w, h) = (self.w as f32, self.h as f32);
-        // Nozzles wander on slow paths, each pushing in a slowly turning direction.
+        // Nozzles wander, each pushing in a slowly turning direction.
         for e in 0..EMITTERS {
             let r = |k: u32| rand01(e, k);
-            // Each nozzle wanders around its own share of the width, so ink stays spread out.
+            // Each keeps to its share of the width.
             let home = (e as f32 + 0.5) / EMITTERS as f32;
             let cx = w * (home + 0.16 * (self.t * (0.05 + 0.04 * r(1)) + TAU * r(2)).sin());
             let cy = h * (0.5 + 0.36 * (self.t * (0.04 + 0.03 * r(3)) + TAU * r(4)).cos());
@@ -419,14 +412,14 @@ impl Ink {
         std::mem::swap(&mut self.v, &mut next);
         self.scratch[0] = next;
         for x in self.u.iter_mut().chain(self.v.iter_mut()) {
-            *x *= 0.995; // a little drag keeps it calm
+            *x *= 0.995; // drag
         }
         self.project();
         let mut next = std::mem::take(&mut self.scratch[0]);
         next.resize(n, 0.0);
         self.advect(&self.dye, &mut next);
         for d in next.iter_mut() {
-            *d *= 0.996; // ink slowly dissolves (half-life about 6 s)
+            *d *= 0.996; // half-life about 6 s
         }
         std::mem::swap(&mut self.dye, &mut next);
         self.scratch[0] = next;
@@ -438,12 +431,11 @@ impl Animation for Ink {
         "ink"
     }
     fn fps(&self) -> u32 {
-        20 // the simulation steps at a fixed 30 per second regardless
+        20 // the simulation runs at a fixed 30 steps per second
     }
 
     fn init(&mut self, size: Size, seed: u64) {
-        // Character cells are about twice as tall as wide, so square sim cells need twice
-        // the rows; then cap the width (and scale the height to match).
+        // Square sim cells: twice the character rows, width capped.
         (self.cols, self.rows) = (size.cols.max(4), size.rows.max(2));
         self.w = self.cols.min(MAX_SIM_W);
         self.h = (self.rows * 2 * self.w / self.cols).max(2);
@@ -459,8 +451,7 @@ impl Animation for Ink {
     }
 
     fn update(&mut self, dt: f32) {
-        // At most a few solver steps per frame; after a stall (sleep, a long pause) the
-        // backlog is dropped rather than ground through.
+        // A few steps per frame at most; after a stall the backlog is dropped.
         self.accum += dt;
         for _ in 0..4 {
             if self.accum < STEP {
@@ -532,11 +523,11 @@ mod tests {
             for s in &out {
                 if let Shape::Line { a, b, level, .. } = *s {
                     if level == 150 {
-                        continue; // the frame's corner brackets
+                        continue; // corner brackets
                     }
                     for p in [a, b] {
                         let (ux, uy) = ((p.0 - 800.0) / t.half.0, (p.1 - 500.0) / t.half.1);
-                        let inside = ux.powi(4) + uy.powi(4) < 0.5; // one 12 px cell of slack
+                        let inside = ux.powi(4) + uy.powi(4) < 0.5; // one cell of slack
                         assert!(!inside, "contour point {p:?} inside the clock box");
                     }
                 }

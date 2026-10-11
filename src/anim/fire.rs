@@ -1,11 +1,11 @@
-//! Classic heat-propagation fire, kept low (about a third of the screen) and soft.
+//! Heat-propagation fire, low (about a third of the screen) and soft.
 
 use super::{Animation, Rng, Size};
 use crate::grid::{Cell, Grid};
 
-/// Simulation step; the fire looks the same at any frame rate.
+/// Fixed step: the same look at any frame rate.
 const STEP: f32 = 1.0 / 30.0;
-/// Flames reach roughly this fraction of the screen height.
+/// Flame height as a fraction of the screen.
 const HEIGHT: f32 = 0.3;
 
 pub struct Fire {
@@ -31,12 +31,12 @@ impl Fire {
 
     fn step(&mut self) {
         let (w, h) = (self.cols, self.rows);
-        // Fuel row: flickering heat along the bottom edge.
+        // Fuel row: flickering heat along the bottom.
         for x in 0..w {
             self.heat[(h - 1) * w + x] = self.rng.range(0.55, 1.0);
         }
-        // Each cell takes the average of the cells below it, minus a random cooling that
-        // averages out to burning out after HEIGHT * rows rows.
+        // Each cell averages the cells below, minus random cooling that burns out after
+        // HEIGHT * rows rows.
         let cool = 2.0 / (h as f32 * HEIGHT).max(4.0);
         for y in 0..h - 1 {
             let below = (y + 1) * w;

@@ -3,7 +3,7 @@
 #[cfg(windows)]
 fn main() {
     if let Err(e) = glyphdrift::app::run() {
-        // Release builds have no console; surface the failure in a dialog.
+        // No console in release builds: show a dialog.
         glyphdrift::app::fatal(&format!("{e}"));
     }
 }

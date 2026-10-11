@@ -150,15 +150,25 @@ h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
   max-width: 1040px;
   margin: 88px auto 0;
   padding: 28px 24px 40px;
-  display: flex;
-  gap: 24px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 14px;
 }
-.footer span { margin-right: auto; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.footer-links span { margin-right: auto; }
 .footer a { text-decoration: none; }
 .footer a:hover { color: var(--text); }
+.trademarks { margin: 16px 0 0; max-width: 720px; font-size: 12px; line-height: 1.5; opacity: 0.8; }
+
+/* Legal pages */
+.legal { max-width: 720px; margin: 0 auto; padding: 112px 24px 0; }
+.legal h1 { margin: 0 0 4px; font-size: clamp(28px, 4vw, 36px); font-weight: 600; letter-spacing: -0.01em; }
+.legal .updated { margin: 0 0 36px; color: var(--muted); font-size: 14px; }
+.legal h2 { margin: 36px 0 10px; font-size: 19px; font-weight: 600; }
+.legal p, .legal li { color: #cfcfcf; }
+.legal ul { padding-left: 22px; }
+.legal li + li { margin-top: 6px; }
+.legal a { color: var(--accent); }
 
 @media (max-width: 640px) {
   .nav { padding: 12px 16px; }
@@ -168,5 +178,6 @@ h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
   .hero-copy { padding: 0 16px 40px; }
   .clock { margin-bottom: 30vh; }
   .groups > div { grid-template-columns: 1fr; gap: 4px; }
-  .footer { padding: 24px 16px 32px; flex-wrap: wrap; }
+  .footer { padding: 24px 16px 32px; }
+  .legal { padding: 88px 16px 0; }
 }

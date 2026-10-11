@@ -223,6 +223,29 @@ pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Res
     std::fs::write(&path, out).map_err(|e| format!("{e}"))
 }
 
+/// Written as the config file on first run. Having no settings keeps every default; the
+/// file's existence is what marks the first-run hint as shown.
+const NEW_CONFIG: &str = "\
+# Glyphdrift settings. Changes made in Settings or the tray menu are saved here, and edits
+# to this file apply within a second. Every option is listed in config.example.toml:
+# https://github.com/Sectr99/GlyphDrift/blob/main/config.example.toml
+";
+
+/// Create the config file if there is none. Returns true if it was created, i.e. this is
+/// the first run.
+pub fn create_if_missing() -> bool {
+    let Some(path) = default_path() else {
+        return false;
+    };
+    if path.exists() {
+        return false;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&path, NEW_CONFIG).is_ok()
+}
+
 /// `%APPDATA%\Glyphdrift\config.toml`
 pub fn default_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("APPDATA")?;
@@ -320,6 +343,13 @@ mod tests {
         assert!(w.is_empty(), "{w:?}");
         assert_eq!((c.general.fps, c.theme.name.as_str()), (30, "dracula"));
         assert!(set_value("[broken", "theme", "name", "x").is_err());
+    }
+
+    #[test]
+    fn new_config_is_all_defaults() {
+        let (c, w) = Config::from_toml(NEW_CONFIG);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(c.general.animation, Config::default().general.animation);
     }
 
     #[test]

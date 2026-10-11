@@ -12,8 +12,8 @@ use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
@@ -202,6 +202,26 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     nid
 }
 
+/// Show a one-off notification from the tray icon (Windows shows it as a toast).
+/// Clicking it opens the settings window.
+pub fn notify(tray: HWND, title: &str, text: &str) {
+    // SAFETY: `tray` is the window from `create`; the struct outlives the call.
+    unsafe {
+        let mut nid = icon_data(tray);
+        nid.uFlags = NIF_INFO;
+        nid.dwInfoFlags = NIIF_INFO;
+        let fill = |dst: &mut [u16], s: &str| {
+            let room = dst.len() - 1; // keep the terminating NUL
+            for (d, c) in dst[..room].iter_mut().zip(s.encode_utf16()) {
+                *d = c;
+            }
+        };
+        fill(&mut nid.szInfoTitle, title);
+        fill(&mut nid.szInfo, text);
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
 /// Update the icon's hover text and paused look (grey icon; the menu offers Resume when
 /// `user_paused`). Does nothing if neither changed.
 pub fn set_status(tray: HWND, tip: &str, paused: bool, user_paused: bool) {
@@ -242,7 +262,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
             LRESULT(0)
         }
-        WM_TRAY if lp.0 as u32 == WM_LBUTTONUP => {
+        WM_TRAY if lp.0 as u32 == WM_LBUTTONUP || lp.0 as u32 == NIN_BALLOONUSERCLICK => {
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
             LRESULT(0)
         }

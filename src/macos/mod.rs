@@ -37,6 +37,8 @@ use crate::ui;
 use render::Renderer;
 
 const PAUSED_INTERVAL: f64 = 1.0;
+/// How often the lock screen frame is redrawn, to stay close to what's running.
+const LOCK_SCREEN_REFRESH: std::time::Duration = std::time::Duration::from_secs(300);
 /// Posted by a second launch to the running one: open settings.
 const OPEN_SETTINGS: &str = "com.sectr99.glyphdrift.open-settings";
 
@@ -76,8 +78,13 @@ pub(crate) struct App {
     auto_paused: Option<&'static str>,
     /// Time and date last shown.
     clock: Option<[String; 2]>,
-    /// The desktop picture, while Match menu bar to theme replaces it.
+    /// The desktop picture, while Match menu bar to theme or Show on lock screen replaces it.
     picture: picture::DesktopPicture,
+    /// Show on lock screen: the frames shown, when they were drawn, and whether something
+    /// changed since (drawn at the next second's check, so slider drags settle first).
+    lock_frames: Vec<std::path::PathBuf>,
+    picture_drawn: Instant,
+    picture_due: bool,
 }
 
 thread_local! {
@@ -174,17 +181,82 @@ impl App {
             });
         }
         self.layout();
-        self.sync_menu_bar(); // new screens get the picture too
+        self.sync_picture(); // new screens get the picture too
     }
 
-    /// Match menu bar to theme: show the background color as the desktop picture, or put
-    /// the user's pictures back.
-    fn sync_menu_bar(&mut self) {
-        if self.cfg.general.match_menu_bar {
-            self.picture.apply(self.mtm, self.renderer.background());
+    /// The desktop picture: a still frame for Show on lock screen (redrawn when due), else
+    /// the theme color for Match menu bar to theme, else the user's own. Runs every second,
+    /// so other Spaces and new screens catch up; cheap when nothing changed.
+    fn sync_picture(&mut self) {
+        let bg = self.renderer.background();
+        if self.cfg.general.lock_screen {
+            if self.picture_due || self.picture_drawn.elapsed() >= LOCK_SCREEN_REFRESH {
+                self.picture_due = false;
+                self.picture_drawn = Instant::now();
+                let frames = self.lock_screen_frames();
+                if !frames.is_empty() {
+                    self.lock_frames = frames;
+                }
+            }
+            self.picture.show(self.mtm, &self.lock_frames, bg);
+        } else if self.cfg.general.match_menu_bar {
+            self.picture.solid(self.mtm, bg);
         } else if self.picture.active() {
             self.picture.restore(self.mtm);
         }
+    }
+
+    /// A still frame per screen, in screen order, written as PNGs: the current animation
+    /// state without the clock (it would go stale), and a theme-colored strip behind the
+    /// menu bar when the windows stop below it.
+    fn lock_screen_frames(&mut self) -> Vec<std::path::PathBuf> {
+        let bg = self.renderer.background();
+        let screens = NSScreen::screens(self.mtm);
+        let mut files = Vec::new();
+        for (i, (s, screen)) in self.surfaces.iter_mut().zip(screens.iter()).enumerate() {
+            let full = screen.frame().size;
+            let (mut grid, mut shapes) = (Grid::new(s.grid.cols(), s.grid.rows()), Vec::new());
+            s.anim.set_clock(None);
+            s.anim.render(&mut grid);
+            s.anim.draw(&mut shapes);
+            s.anim.set_clock(self.clock.as_ref());
+            let frame = match render::render_offscreen(
+                &mut self.renderer,
+                (s.width, s.height),
+                s.scale,
+                &grid,
+                &shapes,
+            ) {
+                Ok(f) => f,
+                Err(e) => {
+                    log!("lock screen: {e}");
+                    continue;
+                }
+            };
+            let image = if s.height < full.height - 0.5 {
+                picture::with_menu_bar_strip(&frame, (full.width, full.height), s.scale, bg)
+            } else {
+                Some(frame)
+            };
+            let (Some(image), Some(path)) = (image, picture::frame_path(i)) else {
+                continue;
+            };
+            match render::png(&image).and_then(|png| {
+                std::fs::write(&path, png).map_err(|e| format!("{}: {e}", path.display()))
+            }) {
+                Ok(()) => files.push(path),
+                Err(e) => log!("lock screen: {e}"),
+            }
+        }
+        files
+    }
+
+    fn toggle_lock_screen(&mut self) {
+        self.cfg.general.lock_screen = !self.cfg.general.lock_screen;
+        save("general", "lock_screen", self.cfg.general.lock_screen);
+        self.picture_due = true;
+        self.sync_picture();
+        settings::refresh(self);
     }
 
     fn toggle_match_menu_bar(&mut self) {
@@ -196,6 +268,7 @@ impl App {
 
     /// Size grids to the windows and re-init the animations.
     fn layout(&mut self) {
+        self.picture_due = true;
         let (cw, ch) = self.renderer.cell_size();
         let g = &self.cfg.general;
         for (i, s) in self.surfaces.iter_mut().enumerate() {
@@ -251,6 +324,7 @@ impl App {
 
     /// Push the theme's colors (warm or cool, per animation) to the renderer and windows.
     fn apply_colors(&mut self) {
+        self.picture_due = true;
         let t = self.theme();
         let warm = self.surfaces.first().is_some_and(|s| s.anim.warm());
         let stops = if warm { &t.warm } else { &t.cool };
@@ -322,6 +396,9 @@ impl App {
         if c.frame_rate {
             self.restart_timer();
         }
+        if c.lock_screen {
+            self.picture_due = true;
+        }
     }
 
     /// Reload the config if the file changed, applying only what differs. True if reloaded.
@@ -390,7 +467,7 @@ impl App {
             self.last_check = Instant::now();
             let changed = self.reload_if_changed() | self.refresh_pause();
             // Theme and readability changes, other Spaces, a picture the user just chose.
-            self.sync_menu_bar();
+            self.sync_picture();
             if changed {
                 self.last_frame = Instant::now();
                 self.restart_timer();
@@ -465,6 +542,11 @@ define_class!(
                 app.tweak(ui::CLOCK, if on { 0.0 } else { 1.0 }, true);
                 settings::refresh(app);
             });
+        }
+
+        #[unsafe(method(toggleLockScreen:))]
+        fn toggle_lock_screen(&self, _sender: Option<&AnyObject>) {
+            with_app(App::toggle_lock_screen);
         }
 
         #[unsafe(method(toggleMatchMenuBar:))]
@@ -700,8 +782,11 @@ pub fn run() -> Result<(), String> {
         user_paused: false,
         auto_paused: None,
         clock: None,
-        // Pictures a crashed run left recorded are restored or kept by `sync_menu_bar`.
+        // Pictures a crashed run left recorded are restored or kept by `sync_picture`.
         picture: picture::DesktopPicture::load(),
+        lock_frames: Vec::new(),
+        picture_drawn: now,
+        picture_due: true,
     };
     state.rebuild_surfaces();
     state.apply_colors();

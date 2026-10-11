@@ -183,6 +183,14 @@ pub fn fill(app: &App, menu: &NSMenu) {
     );
     checked(&menu_bar, app.cfg.general.match_menu_bar);
     menu.addItem(&menu_bar);
+    let lock_screen = item(
+        mtm,
+        "Show on Lock Screen",
+        Some(sel!(toggleLockScreen:)),
+        target,
+    );
+    checked(&lock_screen, app.cfg.general.lock_screen);
+    menu.addItem(&lock_screen);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let login = item(mtm, "Open at Login", Some(sel!(toggleLogin:)), target);
     checked(&login, autostart::enabled());

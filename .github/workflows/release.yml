@@ -85,7 +85,7 @@ jobs:
             echo "## Downloads"
             echo
             echo "- **Windows 10/11:** \`glyphdrift.exe\`. Not code-signed yet, so SmartScreen may warn on first run."
-            echo "- **macOS 12+ (Apple silicon and Intel):** \`Glyphdrift-macos.zip\`. Not notarized yet: right-click Glyphdrift.app and choose **Open** the first time."
+            echo "- **macOS 12+ (Apple silicon and Intel):** \`Glyphdrift-macos.zip\`. Not notarized yet, so macOS blocks the first launch: open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**."
             echo
             echo "## SHA-256"
             echo

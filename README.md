@@ -1,4 +1,4 @@
-# ASCII Wallpaper
+# WallMotion
 
 A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behind your desktop icons.
 
@@ -10,10 +10,12 @@ A lightweight live wallpaper for Windows 10/11 that draws ASCII animations behin
 
 ## Use
 
-Run `ascii-wallpaper.exe`. Everything is controlled from its tray icon (right-click):
+Run `wallmotion.exe`. Everything is controlled from its tray icon (right-click):
 
 | Menu | What it does |
 |---|---|
+| Settings… | A settings window: animation, theme list with color swatches, and live sliders for speed, frame rate, glass, overall scale and object scale, plus the clock toggle |
+| Show clock | Time and date (your regional format) in a framed box at the center of Topographic drift; the contour lines flow around it |
 | Animation | Switch animation |
 | Theme | Switch color theme |
 | Speed | 0.25× to 2× |
@@ -27,19 +29,19 @@ Changes apply immediately and are remembered.
 
 ## Configuration
 
-Settings live in `%APPDATA%\ascii-wallpaper\config.toml`, created when you first change something from the tray. You can also edit it by hand; changes apply within a second, no restart needed. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
+Settings live in `%APPDATA%\WallMotion\config.toml`, created when you first change something from the tray. You can also edit it by hand; changes apply within a second, no restart needed. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
 
 ## Uninstall
 
 1. Untick **Start with Windows** in the tray menu, then **Quit**.
-2. Delete `ascii-wallpaper.exe` and the `%APPDATA%\ascii-wallpaper` folder.
+2. Delete `wallmotion.exe` and the `%APPDATA%\WallMotion` folder.
 
 ## Build
 
 Requires Rust with the MSVC toolchain (`x86_64-pc-windows-msvc`).
 
 ```
-cargo build --release      # target\release\ascii-wallpaper.exe, no console window
+cargo build --release      # target\release\wallmotion.exe, no console window
 cargo run                  # debug build with a console for log output; Ctrl+C quits
 cargo test                 # portable core (animations, themes, config); runs on any OS
 cargo clippy --all-targets

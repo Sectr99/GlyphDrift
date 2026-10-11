@@ -25,6 +25,12 @@ pub struct General {
     pub animation: String,
     /// Animation speed multiplier.
     pub speed: f32,
+    /// Overall scale: ASCII font size, line weights and feature sizes.
+    pub scale: f32,
+    /// Extra scale for centered objects.
+    pub object_scale: f32,
+    /// Show the time and date (animations with a clock area: Topographic drift).
+    pub clock: bool,
     pub pause_on_fullscreen: bool,
     pub pause_on_battery_saver: bool,
 }
@@ -60,6 +66,9 @@ impl Default for General {
             fps: 0,
             animation: "matrix".into(),
             speed: 1.0,
+            scale: 1.0,
+            object_scale: 1.0,
+            clock: false,
             pause_on_fullscreen: true,
             pause_on_battery_saver: true,
         }
@@ -138,6 +147,20 @@ impl Config {
             ));
             self.theme.glass = glass;
         }
+        for (name, value) in [
+            ("scale", &mut self.general.scale),
+            ("object_scale", &mut self.general.object_scale),
+        ] {
+            let clamped = if value.is_finite() {
+                value.clamp(0.5, 2.0)
+            } else {
+                1.0
+            };
+            if clamped != *value {
+                w.push(format!("{name} {value} out of range, using {clamped}"));
+                *value = clamped;
+            }
+        }
         let size = self.font.size.clamp(6, 96);
         if size != self.font.size {
             w.push(format!(
@@ -200,14 +223,26 @@ pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Res
     std::fs::write(&path, out).map_err(|e| format!("{e}"))
 }
 
-/// `%APPDATA%\ascii-wallpaper\config.toml`
+/// `%APPDATA%\WallMotion\config.toml`
 pub fn default_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("APPDATA")?;
     Some(
         std::path::PathBuf::from(base)
-            .join("ascii-wallpaper")
+            .join("WallMotion")
             .join("config.toml"),
     )
+}
+
+/// One-time move of the settings folder from before the WallMotion rename.
+pub fn migrate() {
+    let Some(base) = std::env::var_os("APPDATA") else {
+        return;
+    };
+    let base = std::path::PathBuf::from(base);
+    let (old, new) = (base.join("ascii-wallpaper"), base.join("WallMotion"));
+    if old.is_dir() && !new.exists() {
+        let _ = std::fs::rename(old, new);
+    }
 }
 
 /// Modification time of the config file, for hot-reload; None if it doesn't exist.

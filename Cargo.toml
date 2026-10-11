@@ -1,8 +1,8 @@
 [package]
-name = "ascii-wallpaper"
+name = "wallmotion"
 version = "0.1.0"
 edition = "2021"
-description = "Lightweight ASCII live wallpaper for Windows"
+description = "WallMotion: a lightweight live wallpaper for Windows"
 license = "MIT"
 
 [dependencies]
@@ -19,12 +19,14 @@ features = [
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
     "Win32_System_Power",
     "Win32_Security",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_UI_Controls",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

@@ -43,7 +43,7 @@ pub fn shade(z: f32, far: f32, near: f32) -> u8 {
 pub fn center(focus: super::Rect) -> ((f32, f32), f32) {
     (
         (focus.x + focus.w / 2.0, focus.y + focus.h / 2.0),
-        focus.unit(),
+        focus.object_unit(),
     )
 }
 

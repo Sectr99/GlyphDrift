@@ -11,32 +11,40 @@ use crate::config::Rgb;
 use crate::grid::Grid;
 use crate::shape::Shape;
 use crate::theme;
-use windows::core::{Result, HSTRING};
+use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,
-    D2D1_PIXEL_FORMAT, D2D_POINT_2F,
+    D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush, D2D1_ELLIPSE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
+    D2D1_RENDER_TARGET_USAGE_NONE,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN,
-    DWRITE_MEASURING_MODE_NATURAL,
+    DWriteCreateFactory, IDWriteFactory, IDWriteFontFace, IDWriteTextFormat,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS,
+    DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC;
 
 const LEVELS: usize = 16;
 const FALLBACK_FONT: &str = "Consolas";
+/// Typeface for `Shape::Text` (Windows 11; DirectWrite falls back to Segoe UI elsewhere).
+const TEXT_FONT: PCWSTR = w!("Segoe UI Variable Display");
 
 pub struct Renderer {
     factory: ID2D1Factory,
+    dwrite: IDWriteFactory,
     face: IDWriteFontFace,
+    /// Text formats for `Shape::Text`, by (size bits, weight).
+    // ponytail: never evicted; sizes only change on resize or scale changes.
+    formats: Vec<((u32, u16), IDWriteTextFormat)>,
     em: f32,
     baseline: f32,
     cell_w: i32,
@@ -143,7 +151,9 @@ impl Renderer {
 
             let mut r = Self {
                 factory,
+                dwrite,
                 face,
+                formats: Vec::new(),
                 em,
                 baseline: m.ascent as f32 * scale,
                 cell_w: ((gm.advanceWidth as f32 * scale).round() as i32).max(1),
@@ -212,6 +222,30 @@ impl Renderer {
                     (y as i32 * self.cell_h) as f32,
                     cell.ch,
                 );
+            }
+        }
+
+        for s in shapes {
+            if let Shape::Text { size, weight, .. } = *s {
+                let key = (size.to_bits(), weight);
+                if !self.formats.iter().any(|f| f.0 == key) {
+                    // SAFETY: COM calls on a live factory with valid constant arguments.
+                    let format = unsafe {
+                        let f = self.dwrite.CreateTextFormat(
+                            TEXT_FONT,
+                            None,
+                            DWRITE_FONT_WEIGHT(weight as i32),
+                            DWRITE_FONT_STYLE_NORMAL,
+                            DWRITE_FONT_STRETCH_NORMAL,
+                            size.max(1.0),
+                            w!(""),
+                        )?;
+                        f.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+                        f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+                        f
+                    };
+                    self.formats.push((key, format));
+                }
             }
         }
 
@@ -296,6 +330,33 @@ impl Renderer {
                             t.rt.FillEllipse(&e, brush);
                         } else {
                             t.rt.DrawEllipse(&e, brush, 1.0, None);
+                        }
+                    }
+                    Shape::Text {
+                        c,
+                        size,
+                        weight,
+                        ref text,
+                        level,
+                    } if level > 0 => {
+                        let key = (size.to_bits(), weight);
+                        if let Some((_, format)) = self.formats.iter().find(|f| f.0 == key) {
+                            let text: Vec<u16> = text.encode_utf16().collect();
+                            // Centered in a box far wider than any line of text.
+                            let rect = D2D_RECT_F {
+                                left: c.0 - size * 40.0,
+                                top: c.1 - size,
+                                right: c.0 + size * 40.0,
+                                bottom: c.1 + size,
+                            };
+                            t.rt.DrawText(
+                                &text,
+                                format,
+                                &rect,
+                                &t.brushes[level_index(level)],
+                                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                DWRITE_MEASURING_MODE_NATURAL,
+                            );
                         }
                     }
                     _ => {} // level 0 is invisible

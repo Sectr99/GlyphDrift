@@ -1,4 +1,4 @@
-# ASCII Live Wallpaper for Windows: Design Document
+# WallMotion (formerly ASCII Live Wallpaper): Design Document
 
 ## 1. Overview
 
@@ -135,7 +135,7 @@ Character ramp for brightness mapping: `" .:-=+*#%@"` (configurable).
 
 ## 8. Configuration
 
-`config.toml` in `%APPDATA%\ascii-wallpaper\`:
+`config.toml` in `%APPDATA%\WallMotion\`:
 
 ```toml
 [general]

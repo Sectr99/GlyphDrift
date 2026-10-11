@@ -126,7 +126,9 @@ impl Animation for LavaLamp {
 // Topographic drift
 
 /// Contour lines over slowly evolving noise terrain. Every fifth line is a heavier index
-/// contour, as on a survey map; higher ground is brighter.
+/// contour, as on a survey map; higher ground is brighter. With a clock, the terrain is
+/// warped around a box at the primary monitor's center, so the lines flow around it the way
+/// streamlines pass an obstacle.
 #[derive(Default)]
 pub struct Topographic {
     t: f32,
@@ -134,11 +136,34 @@ pub struct Topographic {
     h: f32,
     /// Feature scale: the primary monitor's smaller side.
     unit: f32,
+    /// Clock box center and half-size (px).
+    center: (f32, f32),
+    half: (f32, f32),
+    /// Time and date, when the clock is on.
+    clock: Option<[String; 2]>,
 }
 
 impl Topographic {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Where terrain point (x, y) is sampled from: with the clock on, points outside the box
+    /// are pulled toward its center (fully at the edge, fading out with distance), and
+    /// points inside return None. Without the clock, the identity.
+    fn warp(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        if self.clock.is_none() {
+            return Some((x, y));
+        }
+        let (qx, qy) = (x - self.center.0, y - self.center.1);
+        let (ux, uy) = (qx / self.half.0, qy / self.half.1);
+        // Superellipse "radius": 1 on a rounded-rectangle boundary.
+        let rho = (ux.powi(4) + uy.powi(4)).sqrt().sqrt();
+        if rho <= 1.0 {
+            return None;
+        }
+        let k = (rho - 1.0 / (rho * rho)) / rho; // 0 at the edge, toward 1 far away
+        Some((self.center.0 + qx * k, self.center.1 + qy * k))
     }
 }
 
@@ -150,19 +175,32 @@ impl Animation for Topographic {
         30
     }
     fn init(&mut self, size: Size, seed: u64) {
-        (self.w, self.h, self.unit) = (size.width, size.height, size.focus.unit().max(1.0));
+        let f = size.focus;
+        (self.w, self.h, self.unit) = (size.width, size.height, f.unit().max(1.0));
+        let obj = f.object_unit().max(1.0);
+        self.center = (f.x + f.w * 0.5, f.y + f.h * 0.5);
+        self.half = (obj * 0.22, obj * 0.095);
         self.t = (seed % 1000) as f32;
     }
     fn update(&mut self, dt: f32) {
         self.t += dt;
+    }
+    fn set_clock(&mut self, clock: Option<&[String; 2]>) {
+        if self.clock.as_ref() != clock {
+            self.clock = clock.cloned();
+        }
     }
     fn draw(&self, out: &mut Vec<Shape>) {
         const LEVELS: i32 = 16; // contour interval: 1/LEVELS of the height range per side
         let unit = self.unit;
         let pen = Pen::new(unit);
         let (scale, drift, morph) = (1.0 / (unit * 0.45), self.t * 0.012, self.t * 0.035);
-        let grid = Field::sample(self.w, self.h, pen.px(12.0), |x, y| {
-            fbm3(x * scale + drift, y * scale, morph)
+        let height = |x: f32, y: f32| fbm3(x * scale + drift, y * scale, morph);
+        let (cx, cy) = self.center;
+        let inside = height(cx, cy); // flat inside the box: no lines cross it
+        let grid = Field::sample(self.w, self.h, pen.px(12.0), |x, y| match self.warp(x, y) {
+            Some((x, y)) => height(x, y),
+            None => inside,
         });
         for k in -LEVELS..=LEVELS {
             let level = k as f32 / LEVELS as f32 * 0.8;
@@ -178,6 +216,39 @@ impl Animation for Topographic {
                     width: pen.px(weight),
                     level: brightness,
                 });
+            });
+        }
+        if let Some([time, date]) = &self.clock {
+            let (hw, hh) = self.half;
+            // Corner brackets: a survey-map frame, inset inside the rounded boundary.
+            let (bx, by, arm) = (hw * 0.8, hh * 0.78, hh * 0.22);
+            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                let corner = (cx + sx * bx, cy + sy * by);
+                for end in [
+                    (corner.0 - sx * arm, corner.1),
+                    (corner.0, corner.1 - sy * arm),
+                ] {
+                    out.push(Shape::Line {
+                        a: corner,
+                        b: end,
+                        width: pen.px(MID),
+                        level: 150,
+                    });
+                }
+            }
+            out.push(Shape::Text {
+                c: (cx, cy - hh * 0.12),
+                size: hh * 0.82,
+                weight: 300,
+                text: time.clone(),
+                level: 255,
+            });
+            out.push(Shape::Text {
+                c: (cx, cy + hh * 0.5),
+                size: hh * 0.17,
+                weight: 400,
+                text: date.to_uppercase(),
+                level: 185,
             });
         }
     }
@@ -399,6 +470,47 @@ impl Animation for Ink {
                         brightness: (40.0 + 215.0 * d) as u8,
                     },
                 );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::anim::Rect;
+
+    #[test]
+    fn topo_lines_flow_around_the_clock_box() {
+        let mut t = Topographic::new();
+        t.init(
+            Size {
+                cols: 200,
+                rows: 60,
+                width: 1600.0,
+                height: 1000.0,
+                focus: Rect::new(0.0, 0.0, 1600.0, 1000.0),
+            },
+            5,
+        );
+        t.set_clock(Some(&["12:34".into(), "Saturday".into()]));
+        for _ in 0..4 {
+            t.update(9.0);
+            let mut out = Vec::new();
+            t.draw(&mut out);
+            assert!(out.iter().any(|s| matches!(s, Shape::Text { .. })));
+
+            for s in &out {
+                if let Shape::Line { a, b, level, .. } = *s {
+                    if level == 150 {
+                        continue; // the frame's corner brackets
+                    }
+                    for p in [a, b] {
+                        let (ux, uy) = ((p.0 - 800.0) / t.half.0, (p.1 - 500.0) / t.half.1);
+                        let inside = ux.powi(4) + uy.powi(4) < 0.5; // one 12 px cell of slack
+                        assert!(!inside, "contour point {p:?} inside the clock box");
+                    }
+                }
             }
         }
     }

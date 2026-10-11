@@ -8,7 +8,9 @@ use windows::Win32::System::Registry::{
 };
 
 const RUN_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
-const VALUE: PCWSTR = w!("ascii-wallpaper");
+const VALUE: PCWSTR = w!("WallMotion");
+/// The Run entry's name before the WallMotion rename.
+const LEGACY_VALUE: PCWSTR = w!("ascii-wallpaper");
 
 /// The command line Windows runs at sign-in: this exe's path, quoted.
 fn command() -> Option<String> {
@@ -60,5 +62,25 @@ pub fn set(on: bool) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("registry error {}", r.0))
+    }
+}
+
+/// Carry a pre-rename Run entry over to the new name and this exe's path.
+pub fn migrate() {
+    // SAFETY: NUL-terminated constant strings; no output buffers are requested.
+    let found = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            RUN_KEY,
+            LEGACY_VALUE,
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            None,
+        )
+    } == ERROR_SUCCESS;
+    if found && set(true).is_ok() {
+        // SAFETY: NUL-terminated constant strings.
+        let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, LEGACY_VALUE) };
     }
 }

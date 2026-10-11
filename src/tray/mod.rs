@@ -40,6 +40,8 @@ pub const WM_SET_GLASS: u32 = WM_APP + 7;
 pub const WM_SET_FPS: u32 = WM_APP + 8;
 const ID_QUIT: usize = 2;
 const ID_AUTOSTART: usize = 3;
+const ID_SETTINGS: usize = 4;
+const ID_CLOCK: usize = 5;
 const ID_ANIM_BASE: usize = 100;
 const ID_THEME_BASE: usize = 200;
 const ID_SPEED_BASE: usize = 300;
@@ -119,7 +121,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
     // an integer and only used as a PostMessage target.
     unsafe {
         let hinst = GetModuleHandleW(None)?;
-        let class = w!("AsciiWallpaperTray");
+        let class = w!("WallMotionTray");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(tray_proc),
             hInstance: hinst.into(),
@@ -135,7 +137,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class,
-            w!("ascii-wallpaper tray"),
+            w!("WallMotion tray"),
             WS_POPUP,
             0,
             0,
@@ -177,7 +179,7 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
         },
         ..Default::default()
     };
-    for (dst, src) in nid.szTip.iter_mut().zip("ASCII Wallpaper".encode_utf16()) {
+    for (dst, src) in nid.szTip.iter_mut().zip("WallMotion".encode_utf16()) {
         *dst = src;
     }
     nid
@@ -201,6 +203,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_TRAY if lp.0 as u32 == WM_RBUTTONUP => {
             let target = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
             if let Ok(menu) = CreatePopupMenu() {
+                let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings…"));
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
                 let [anim_i, theme_i, speed_i, glass_i, fps_i] =
                     unpack_state(SendMessageW(target, WM_GET_STATE, WPARAM(0), LPARAM(0)).0);
                 let anims = crate::anim::ANIMATIONS.iter().map(|a| (a.1, a.2));
@@ -223,6 +227,19 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 if let Some(sub) = radio_submenu(rates, ID_FPS_BASE, fps_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Frame rate"));
                 }
+                let clock = SendMessageW(
+                    target,
+                    crate::settings::WM_GET_TWEAK,
+                    WPARAM(crate::settings::CLOCK),
+                    LPARAM(0),
+                )
+                .0 != 0;
+                let flags = if clock {
+                    MF_STRING | MF_CHECKED
+                } else {
+                    MF_STRING
+                };
+                let _ = AppendMenuW(menu, flags, ID_CLOCK, w!("Show clock"));
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
                 let autostart = crate::autostart::enabled();
                 let flags = if autostart {
@@ -249,6 +266,16 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 match cmd.0 as usize {
                     ID_PAUSE => {
                         let _ = PostMessageW(target, WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
+                    }
+                    ID_SETTINGS => crate::settings::open(target),
+                    ID_CLOCK => {
+                        // Toggle and save: WM_TWEAK with commit, value 0 or 1000 (1.0).
+                        let _ = PostMessageW(
+                            target,
+                            crate::settings::WM_TWEAK,
+                            WPARAM(crate::settings::CLOCK | 1 << 8),
+                            LPARAM(if clock { 0 } else { 1000 }),
+                        );
                     }
                     ID_AUTOSTART => {
                         if let Err(e) = crate::autostart::set(!autostart) {

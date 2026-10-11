@@ -1,0 +1,573 @@
+//! The settings window: animation, theme (with color swatches) and live sliders for speed,
+//! frame rate, glass and scale. Standard Win32 controls, so keyboard navigation and screen
+//! readers work for free. Changes apply as you drag and are saved when you let go; the window
+//! talks to the wallpaper window with messages, like the tray menu.
+
+use std::sync::atomic::{AtomicIsize, Ordering};
+
+use windows::core::{w, HSTRING, PCWSTR};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColor,
+    GetSysColorBrush, SetBkMode, SetTextColor, COLOR_BTNFACE, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
+    COLOR_WINDOW, COLOR_WINDOWTEXT, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HBRUSH, HFONT, TRANSPARENT,
+};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::{
+    InitCommonControlsEx, DRAWITEMSTRUCT, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX, MEASUREITEMSTRUCT,
+    ODS_SELECTED, TBM_SETPOS, TBM_SETRANGE, TB_ENDTRACK, TRACKBAR_CLASSW,
+};
+use windows::Win32::UI::HiDpi::GetDpiForSystem;
+use windows::Win32::UI::WindowsAndMessaging::{
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetDlgCtrlID, GetDlgItem,
+    GetSystemMetrics, IsWindow, LoadIconW, PostMessageW, RegisterClassW, SendMessageW,
+    SetForegroundWindow, SetWindowTextW, ShowWindow, SystemParametersInfoW, BM_GETCHECK,
+    BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL,
+    CB_SETCURSEL, HMENU, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL,
+    NONCLIENTMETRICSW, SM_CXSCREEN, SM_CYSCREEN, SPI_GETNONCLIENTMETRICS, SW_RESTORE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CREATE, WM_DESTROY,
+    WM_DRAWITEM, WM_HSCROLL, WM_MEASUREITEM, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD,
+    WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
+};
+
+use crate::anim::ANIMATIONS;
+use crate::theme::{gradient, THEMES};
+use crate::tray::{WM_GET_STATE, WM_SET_ANIMATION, WM_SET_THEME};
+
+/// Sent to the wallpaper window: WPARAM = tweak id | commit << 8, LPARAM = value * 1000.
+/// `commit` (set when a slider is released) means "save to the config too".
+pub const WM_TWEAK: u32 = WM_APP + 9;
+/// Sent to the wallpaper window: WPARAM = tweak id; returns value * 1000.
+pub const WM_GET_TWEAK: u32 = WM_APP + 10;
+pub const SPEED: usize = 0;
+pub const FPS: usize = 1;
+pub const GLASS: usize = 2;
+pub const SCALE: usize = 3;
+pub const OBJECT_SCALE: usize = 4;
+/// Clock on/off (value 1 or 0); a checkbox, not a slider.
+pub const CLOCK: usize = 5;
+
+/// (tweak id, label, slider min, slider max, default value)
+const SLIDERS: [(usize, &str, i32, i32, f32); 5] = [
+    (SPEED, "Speed", 10, 400, 1.0),
+    (FPS, "Frame rate", 9, 60, 0.0), // position 9 means Auto
+    (GLASS, "Glass", 0, 90, 0.0),
+    (SCALE, "Overall scale", 50, 200, 1.0),
+    (OBJECT_SCALE, "Object scale", 50, 200, 1.0),
+];
+
+const ID_ANIMATION: usize = 100;
+const ID_THEME: usize = 101;
+const ID_RESET: usize = 102;
+const ID_CLOCK: usize = 103;
+const ID_CLOSE: usize = 2; // IDCANCEL, so Esc closes the window
+const ID_SLIDER: usize = 200; // + tweak id
+const ID_VALUE: usize = 300; // + tweak id
+const TBM_GETPOS: u32 = 0x400; // WM_USER; not exported by the windows crate
+const CBN_SELCHANGE: usize = 1;
+const LBN_SELCHANGE: usize = 1;
+const THEME_ROWS: i32 = 8;
+const ROW_H: i32 = 30;
+const CLIENT_W: i32 = 520;
+
+static WINDOW: AtomicIsize = AtomicIsize::new(0);
+static TARGET: AtomicIsize = AtomicIsize::new(0);
+static FONT: AtomicIsize = AtomicIsize::new(0);
+
+fn slider_pos(id: usize, value: f32) -> i32 {
+    match id {
+        FPS if value < 1.0 => 9,
+        FPS => value.round() as i32,
+        _ => (value * 100.0).round() as i32,
+    }
+}
+
+fn slider_value(id: usize, pos: i32) -> f32 {
+    match id {
+        FPS if pos <= 9 => 0.0,
+        FPS => pos as f32,
+        _ => pos as f32 / 100.0,
+    }
+}
+
+fn value_label(id: usize, value: f32) -> String {
+    match id {
+        SPEED => format!("{value:.2}×"),
+        FPS if value < 1.0 => "Auto".into(),
+        FPS => format!("{value:.0} fps"),
+        _ => format!("{:.0}%", value * 100.0),
+    }
+}
+
+fn dpi_scale() -> f32 {
+    // SAFETY: no preconditions.
+    unsafe { GetDpiForSystem() }.max(96) as f32 / 96.0
+}
+
+/// The settings window, if open (for keyboard navigation in the message loop).
+pub fn window() -> HWND {
+    HWND(WINDOW.load(Ordering::Relaxed) as *mut _)
+}
+
+fn target() -> HWND {
+    HWND(TARGET.load(Ordering::Relaxed) as *mut _)
+}
+
+/// Open the settings window for the wallpaper window `wallpaper`, or bring it forward.
+pub fn open(wallpaper: HWND) {
+    // SAFETY: standard window creation on the UI thread; the class is registered once and
+    // re-registering just fails harmlessly.
+    unsafe {
+        let existing = window();
+        if !existing.is_invalid() && IsWindow(existing).as_bool() {
+            let _ = ShowWindow(existing, SW_RESTORE);
+            let _ = SetForegroundWindow(existing);
+            return;
+        }
+        TARGET.store(wallpaper.0 as isize, Ordering::Relaxed);
+        let icc = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_BAR_CLASSES,
+        };
+        let _ = InitCommonControlsEx(&icc);
+        let Ok(hinst) = GetModuleHandleW(None) else {
+            return;
+        };
+        let class = w!("WallMotionSettings");
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(proc_),
+            hInstance: hinst.into(),
+            lpszClassName: class,
+            // MAKEINTRESOURCE(1): the exe icon (resource id 1), an integer passed as a pointer.
+            hIcon: LoadIconW(hinst, PCWSTR(std::ptr::without_provenance(1))).unwrap_or_default(),
+            hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as isize as *mut _),
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+        let s = dpi_scale();
+        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: px(CLIENT_W, s),
+            bottom: px(client_height(), s),
+        };
+        let _ = AdjustWindowRectEx(&mut rect, style, false, WS_EX_CONTROLPARENT);
+        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+        let (x, y) = (
+            (GetSystemMetrics(SM_CXSCREEN) - w) / 2,
+            (GetSystemMetrics(SM_CYSCREEN) - h) / 2,
+        );
+        let _ = CreateWindowExW(
+            WS_EX_CONTROLPARENT,
+            class,
+            w!("WallMotion Settings"),
+            style | WS_VISIBLE,
+            x,
+            y,
+            w,
+            h,
+            None,
+            None,
+            hinst,
+            None,
+        );
+    }
+}
+
+fn px(v: i32, s: f32) -> i32 {
+    (v as f32 * s).round() as i32
+}
+
+const M: i32 = 16; // margin
+const LABEL_H: i32 = 20;
+
+/// Client height at 96 DPI, matching the layout in `build`.
+fn client_height() -> i32 {
+    M + (LABEL_H + 4)
+        + 34
+        + (LABEL_H + 4)
+        + THEME_ROWS * ROW_H
+        + 4
+        + 14
+        + SLIDERS.len() as i32 * 36
+        + 28
+        + 8
+        + 28
+        + M
+}
+
+/// Create the controls (96-DPI layout scaled by `s`) and load the current settings.
+unsafe fn build(hwnd: HWND) {
+    let s = dpi_scale();
+    let Ok(hinst) = GetModuleHandleW(None) else {
+        return;
+    };
+    let font = {
+        let mut ncm = NONCLIENTMETRICSW {
+            cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
+            ..Default::default()
+        };
+        let _ = SystemParametersInfoW(
+            SPI_GETNONCLIENTMETRICS,
+            ncm.cbSize,
+            Some(&mut ncm as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+        CreateFontIndirectW(&ncm.lfMessageFont)
+    };
+    FONT.store(font.0 as isize, Ordering::Relaxed);
+    let control = |class: PCWSTR,
+                   text: &str,
+                   style: WINDOW_STYLE,
+                   (x, y, w, h): (i32, i32, i32, i32),
+                   id: usize| {
+        let child = CreateWindowExW(
+            Default::default(),
+            class,
+            &HSTRING::from(text),
+            WS_CHILD | WS_VISIBLE | style,
+            px(x, s),
+            px(y, s),
+            px(w, s),
+            px(h, s),
+            hwnd,
+            HMENU(id as *mut _),
+            hinst,
+            None,
+        )
+        .unwrap_or_default();
+        SendMessageW(child, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+        child
+    };
+    let full = CLIENT_W - 2 * M;
+    let mut y = M;
+    control(
+        w!("STATIC"),
+        "Animation",
+        WINDOW_STYLE(0),
+        (M, y, full, LABEL_H),
+        0,
+    );
+    y += LABEL_H + 4;
+    let combo = control(
+        w!("COMBOBOX"),
+        "",
+        WINDOW_STYLE(CBS_DROPDOWNLIST as u32) | WS_TABSTOP | WS_VSCROLL,
+        (M, y, full, 420),
+        ID_ANIMATION,
+    );
+    for &(_, label, _) in ANIMATIONS {
+        SendMessageW(
+            combo,
+            CB_ADDSTRING,
+            WPARAM(0),
+            LPARAM(HSTRING::from(label).as_ptr() as isize),
+        );
+    }
+    y += 34;
+    control(
+        w!("STATIC"),
+        "Theme",
+        WINDOW_STYLE(0),
+        (M, y, full, LABEL_H),
+        0,
+    );
+    y += LABEL_H + 4;
+    let list = control(
+        w!("LISTBOX"),
+        "",
+        WINDOW_STYLE((LBS_OWNERDRAWFIXED | LBS_NOTIFY) as u32) | WS_TABSTOP | WS_VSCROLL,
+        (M, y, full, THEME_ROWS * ROW_H + 4),
+        ID_THEME,
+    );
+    for i in 0..THEMES.len() {
+        SendMessageW(list, LB_ADDSTRING, WPARAM(0), LPARAM(i as isize)); // owner-drawn: data only
+    }
+    y += THEME_ROWS * ROW_H + 4 + 14;
+    for (id, label, min, max, _) in SLIDERS {
+        control(
+            w!("STATIC"),
+            label,
+            WINDOW_STYLE(0),
+            (M, y + 6, 130, LABEL_H),
+            0,
+        );
+        let slider = control(
+            TRACKBAR_CLASSW,
+            "",
+            WS_TABSTOP,
+            (M + 130, y, full - 130 - 74, 30),
+            ID_SLIDER + id,
+        );
+        SendMessageW(
+            slider,
+            TBM_SETRANGE,
+            WPARAM(1),
+            LPARAM(((max << 16) | min) as isize),
+        );
+        control(
+            w!("STATIC"),
+            "",
+            WINDOW_STYLE(2),
+            (CLIENT_W - M - 70, y + 6, 70, LABEL_H),
+            ID_VALUE + id,
+        ); // SS_RIGHT
+        y += 36;
+    }
+    control(
+        w!("BUTTON"),
+        "Show clock (Topographic drift)",
+        WINDOW_STYLE(BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
+        (M, y, full, 24),
+        ID_CLOCK,
+    );
+    y += 28 + 8;
+    control(
+        w!("BUTTON"),
+        "Reset to defaults",
+        WINDOW_STYLE(BS_PUSHBUTTON as u32) | WS_TABSTOP,
+        (M, y, 150, 28),
+        ID_RESET,
+    );
+    control(
+        w!("BUTTON"),
+        "Close",
+        WINDOW_STYLE(BS_PUSHBUTTON as u32) | WS_TABSTOP,
+        (CLIENT_W - M - 100, y, 100, 28),
+        ID_CLOSE,
+    );
+    load(hwnd);
+}
+
+/// Reflect the wallpaper's current settings in the controls.
+unsafe fn load(hwnd: HWND) {
+    let state = SendMessageW(target(), WM_GET_STATE, WPARAM(0), LPARAM(0)).0 as usize;
+    SendMessageW(
+        GetDlgItem(hwnd, ID_ANIMATION as i32).unwrap_or_default(),
+        CB_SETCURSEL,
+        WPARAM(state & 0xFF),
+        LPARAM(0),
+    );
+    SendMessageW(
+        GetDlgItem(hwnd, ID_THEME as i32).unwrap_or_default(),
+        LB_SETCURSEL,
+        WPARAM((state >> 8) & 0xFF),
+        LPARAM(0),
+    );
+    for (id, ..) in SLIDERS {
+        let value = SendMessageW(target(), WM_GET_TWEAK, WPARAM(id), LPARAM(0)).0 as f32 / 1000.0;
+        show(hwnd, id, value);
+    }
+    let clock = SendMessageW(target(), WM_GET_TWEAK, WPARAM(CLOCK), LPARAM(0)).0 != 0;
+    SendMessageW(
+        GetDlgItem(hwnd, ID_CLOCK as i32).unwrap_or_default(),
+        BM_SETCHECK,
+        WPARAM(usize::from(clock)),
+        LPARAM(0),
+    );
+}
+
+/// Move slider `id` to `value` and update its readout.
+unsafe fn show(hwnd: HWND, id: usize, value: f32) {
+    if let Ok(slider) = GetDlgItem(hwnd, (ID_SLIDER + id) as i32) {
+        SendMessageW(
+            slider,
+            TBM_SETPOS,
+            WPARAM(1),
+            LPARAM(slider_pos(id, value) as isize),
+        );
+    }
+    if let Ok(label) = GetDlgItem(hwnd, (ID_VALUE + id) as i32) {
+        let _ = SetWindowTextW(label, &HSTRING::from(value_label(id, value)));
+    }
+}
+
+fn tweak(id: usize, value: f32, commit: bool) {
+    let wp = id | usize::from(commit) << 8;
+    // SAFETY: plain message post to the wallpaper window.
+    unsafe {
+        let _ = PostMessageW(
+            target(),
+            WM_TWEAK,
+            WPARAM(wp),
+            LPARAM((value * 1000.0).round() as isize),
+        );
+    }
+}
+
+/// One theme row: its name, then swatches of its background, cool and warm gradients.
+unsafe fn draw_theme_row(d: &DRAWITEMSTRUCT) {
+    let Some(theme) = THEMES.get(d.itemID as usize) else {
+        return;
+    };
+    let selected = d.itemState.0 & ODS_SELECTED.0 != 0;
+    let rc = d.rcItem;
+    FillRect(
+        d.hDC,
+        &rc,
+        GetSysColorBrush(if selected {
+            COLOR_HIGHLIGHT
+        } else {
+            COLOR_WINDOW
+        }),
+    );
+    SetBkMode(d.hDC, TRANSPARENT);
+    SetTextColor(
+        d.hDC,
+        COLORREF(GetSysColor(if selected {
+            COLOR_HIGHLIGHTTEXT
+        } else {
+            COLOR_WINDOWTEXT
+        })),
+    );
+    let s = dpi_scale();
+    let name_w = px(150, s);
+    let mut text_rc = RECT {
+        left: rc.left + px(8, s),
+        right: rc.left + name_w,
+        ..rc
+    };
+    let mut name: Vec<u16> = theme.label.encode_utf16().collect();
+    DrawTextW(
+        d.hDC,
+        &mut name,
+        &mut text_rc,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+
+    let swatch = |x0: i32, x1: i32, c: crate::config::Rgb| {
+        let r = RECT {
+            left: x0,
+            top: rc.top + px(5, s),
+            right: x1,
+            bottom: rc.bottom - px(5, s),
+        };
+        let brush = CreateSolidBrush(COLORREF(
+            c.0 as u32 | (c.1 as u32) << 8 | (c.2 as u32) << 16,
+        ));
+        FillRect(d.hDC, &r, brush);
+        let _ = DeleteObject(brush);
+    };
+    let (left, right) = (rc.left + name_w, rc.right - px(8, s));
+    let bg_w = px(26, s);
+    let gap = px(6, s);
+    let cell = (right - left - bg_w - 2 * gap) as f32 / 32.0;
+    swatch(left, left + bg_w, theme.bg);
+    for (row, stops) in [(0, &theme.cool), (1, &theme.warm)] {
+        let x0 = left + bg_w + gap + row * (16.0 * cell) as i32 + row * gap;
+        for (i, c) in gradient(theme.bg, stops, 16).into_iter().enumerate() {
+            swatch(
+                x0 + (i as f32 * cell) as i32,
+                x0 + ((i + 1) as f32 * cell) as i32,
+                c,
+            );
+        }
+    }
+}
+
+unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            WINDOW.store(hwnd.0 as isize, Ordering::Relaxed);
+            build(hwnd);
+            LRESULT(0)
+        }
+        WM_MEASUREITEM => {
+            let m = &mut *(lp.0 as *mut MEASUREITEMSTRUCT);
+            m.itemHeight = px(ROW_H, dpi_scale()) as u32;
+            LRESULT(1)
+        }
+        WM_DRAWITEM => {
+            draw_theme_row(&*(lp.0 as *const DRAWITEMSTRUCT));
+            LRESULT(1)
+        }
+        WM_COMMAND => {
+            let (id, code) = (wp.0 & 0xFFFF, (wp.0 >> 16) & 0xFFFF);
+            let source = HWND(lp.0 as *mut _);
+            match id {
+                ID_ANIMATION if code == CBN_SELCHANGE => {
+                    let sel = SendMessageW(source, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+                    if sel >= 0 {
+                        let _ = PostMessageW(
+                            target(),
+                            WM_SET_ANIMATION,
+                            WPARAM(sel as usize),
+                            LPARAM(0),
+                        );
+                    }
+                }
+                ID_THEME if code == LBN_SELCHANGE => {
+                    let sel = SendMessageW(source, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+                    if sel >= 0 {
+                        let _ =
+                            PostMessageW(target(), WM_SET_THEME, WPARAM(sel as usize), LPARAM(0));
+                    }
+                }
+                ID_CLOCK => {
+                    let on = SendMessageW(source, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0;
+                    tweak(CLOCK, f32::from(u8::from(on)), true);
+                }
+                ID_RESET => {
+                    for (sid, _, _, _, default) in SLIDERS {
+                        show(hwnd, sid, default);
+                        tweak(sid, default, true);
+                    }
+                }
+                ID_CLOSE => {
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_HSCROLL => {
+            let slider = HWND(lp.0 as *mut _);
+            let id = (GetDlgCtrlID(slider) as usize).wrapping_sub(ID_SLIDER);
+            if id < SLIDERS.len() {
+                let pos = SendMessageW(slider, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
+                let value = slider_value(id, pos);
+                if let Ok(label) = GetDlgItem(hwnd, (ID_VALUE + id) as i32) {
+                    let _ = SetWindowTextW(label, &HSTRING::from(value_label(id, value)));
+                }
+                // Live while dragging; saved when released (or after a keyboard step).
+                tweak(id, value, (wp.0 & 0xFFFF) as u32 == TB_ENDTRACK);
+            }
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            WINDOW.store(0, Ordering::Relaxed);
+            let font = FONT.swap(0, Ordering::Relaxed);
+            if font != 0 {
+                let _ = DeleteObject(HFONT(font as *mut _));
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slider_positions_round_trip() {
+        for (id, _, min, max, default) in SLIDERS {
+            assert!(
+                (min..=max).contains(&slider_pos(id, default)),
+                "default out of range for {id}"
+            );
+            for pos in min..=max {
+                assert_eq!(
+                    slider_pos(id, slider_value(id, pos)),
+                    pos,
+                    "slider {id} position {pos}"
+                );
+            }
+        }
+        assert_eq!(value_label(FPS, 0.0), "Auto");
+        assert_eq!(value_label(SCALE, 1.25), "125%");
+    }
+}

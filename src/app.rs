@@ -7,6 +7,9 @@ use windows::core::{w, Error, Result};
 use windows::Win32::Foundation::{
     CloseHandle, BOOL, COLORREF, HANDLE, HWND, LPARAM, LRESULT, WAIT_OBJECT_0, WPARAM,
 };
+use windows::Win32::Globalization::{
+    GetDateFormatEx, GetTimeFormatEx, DATE_LONGDATE, TIME_NOSECONDS,
+};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
@@ -17,13 +20,13 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW, IsWindow,
-    MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostQuitMessage, RegisterClassW,
-    SendMessageW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW, TranslateMessage,
-    CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR, MB_OK, MSG, MWMO_INPUTAVAILABLE,
-    PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_NCCREATE,
-    WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
+    IsDialogMessageW, IsWindow, MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW,
+    PostQuitMessage, RegisterClassW, SendMessageW, SetLayeredWindowAttributes, SetParent,
+    SetWindowLongPtrW, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR,
+    MB_OK, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW,
+    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 use crate::anim::{self, Animation};
@@ -32,6 +35,7 @@ use crate::desktop;
 use crate::grid::Grid;
 use crate::power;
 use crate::render::Renderer;
+use crate::settings;
 use crate::shape::Shape;
 use crate::theme::{self, THEMES};
 use crate::tray;
@@ -127,10 +131,9 @@ impl App {
             width: width as f32,
             height: height as f32,
             focus: anim::Rect {
-                x: fx,
-                y: fy,
-                w: fw,
-                h: fh,
+                zoom: self.cfg.general.scale,
+                object_zoom: self.cfg.general.object_scale,
+                ..anim::Rect::new(fx, fy, fw, fh)
             },
         };
         self.anim.init(size, self.seed);
@@ -140,8 +143,95 @@ impl App {
     /// Capture the animation's current frame: grid cells plus vector shapes.
     fn render_frame(&mut self) {
         self.anim.render(&mut self.grid);
+        self.anim
+            .set_clock(self.cfg.general.clock.then(local_clock).as_ref());
         self.shapes.clear();
         self.anim.draw(&mut self.shapes);
+    }
+
+    /// New renderer for the current font and overall scale, then re-lay out the frame.
+    fn rebuild_renderer(&mut self) {
+        let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
+        match Renderer::new(
+            &self.cfg.font.family,
+            font_size(&self.cfg),
+            t.bg,
+            &t.cool,
+            0.0,
+        ) {
+            Ok(r) => self.renderer = r,
+            Err(e) => eprintln!("render: rebuild failed: {e}"),
+        }
+        self.apply_colors();
+        self.resize(self.width, self.height);
+    }
+
+    /// A settings value as the settings window shows it (see `settings::WM_GET_TWEAK`).
+    fn tweak_value(&self, id: usize) -> f32 {
+        let g = &self.cfg.general;
+        match id {
+            settings::SPEED => g.speed,
+            settings::FPS => g.fps as f32,
+            settings::GLASS => self.cfg.theme.glass,
+            settings::SCALE => g.scale,
+            settings::OBJECT_SCALE => g.object_scale,
+            settings::CLOCK => f32::from(u8::from(g.clock)),
+            _ => 0.0,
+        }
+    }
+
+    /// Apply a settings value live; with `commit`, also save it to the config.
+    fn tweak(&mut self, id: usize, value: f32, commit: bool) {
+        match id {
+            settings::SPEED => {
+                self.cfg.general.speed = value.clamp(0.1, 4.0);
+                if commit {
+                    save("general", "speed", decimal(self.cfg.general.speed));
+                }
+            }
+            settings::FPS => {
+                self.cfg.general.fps = value.round().clamp(0.0, 60.0) as u32;
+                self.timer.set(self.interval_ms());
+                if commit {
+                    save("general", "fps", self.cfg.general.fps as i64);
+                }
+            }
+            settings::GLASS => {
+                self.cfg.theme.glass = value.clamp(0.0, 0.9);
+                self.apply_colors();
+                if commit {
+                    save("theme", "glass", decimal(self.cfg.theme.glass));
+                }
+            }
+            settings::SCALE => {
+                let scale = value.clamp(0.5, 2.0);
+                if scale != self.cfg.general.scale {
+                    self.cfg.general.scale = scale;
+                    self.rebuild_renderer(); // the font size follows the overall scale
+                }
+                if commit {
+                    save("general", "scale", decimal(scale));
+                }
+            }
+            settings::OBJECT_SCALE => {
+                let scale = value.clamp(0.5, 2.0);
+                if scale != self.cfg.general.object_scale {
+                    self.cfg.general.object_scale = scale;
+                    self.resize(self.width, self.height);
+                }
+                if commit {
+                    save("general", "object_scale", decimal(scale));
+                }
+            }
+            settings::CLOCK => {
+                self.cfg.general.clock = value > 0.5;
+                self.render_frame();
+                if commit {
+                    save("general", "clock", self.cfg.general.clock);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Push the current theme's colors (warm or cool, per animation) to the renderer.
@@ -165,7 +255,12 @@ impl App {
         }
         let old = std::mem::replace(&mut self.cfg, cfg);
         let (new_font, new_anim) = (
-            (&old.font.family, old.font.size) != (&self.cfg.font.family, self.cfg.font.size),
+            (&old.font.family, old.font.size, old.general.scale)
+                != (
+                    &self.cfg.font.family,
+                    self.cfg.font.size,
+                    self.cfg.general.scale,
+                ),
             (&old.general.animation, &old.theme.ramp)
                 != (&self.cfg.general.animation, &self.cfg.theme.ramp),
         );
@@ -173,7 +268,7 @@ impl App {
             let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
             match Renderer::new(
                 &self.cfg.font.family,
-                font_px(self.cfg.font.size),
+                font_size(&self.cfg),
                 t.bg,
                 &t.cool,
                 0.0,
@@ -185,7 +280,7 @@ impl App {
         if new_anim {
             self.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
         }
-        if new_font || new_anim {
+        if new_font || new_anim || old.general.object_scale != self.cfg.general.object_scale {
             self.resize(self.width, self.height); // new cell size and/or fresh animation
         }
         self.apply_colors();
@@ -317,15 +412,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if let (Some(app), Some(&(glass, _))) = (app_of(hwnd), theme::GLASS.get(wp.0)) {
                 app.cfg.theme.glass = glass;
                 app.apply_colors();
-                save("theme", "glass", glass as f64);
+                save("theme", "glass", decimal(glass));
                 let _ = InvalidateRect(hwnd, None, BOOL(0));
             }
             LRESULT(0)
         }
+        settings::WM_TWEAK => {
+            if let Some(app) = app_of(hwnd) {
+                let (id, commit) = (wp.0 & 0xFF, (wp.0 >> 8) & 1 == 1);
+                app.tweak(id, lp.0 as f32 / 1000.0, commit);
+                let _ = InvalidateRect(hwnd, None, BOOL(0));
+            }
+            LRESULT(0)
+        }
+        settings::WM_GET_TWEAK => match app_of(hwnd) {
+            Some(app) => LRESULT((app.tweak_value(wp.0) * 1000.0).round() as isize),
+            None => LRESULT(0),
+        },
         tray::WM_SET_SPEED => {
             if let (Some(app), Some(&(speed, _))) = (app_of(hwnd), anim::SPEEDS.get(wp.0)) {
                 app.cfg.general.speed = speed;
-                save("general", "speed", speed as f64);
+                save("general", "speed", decimal(speed));
             }
             LRESULT(0)
         }
@@ -357,6 +464,19 @@ fn font_px(size: i32) -> i32 {
     (size as f32 * dpi as f32 / 96.0).round() as i32
 }
 
+/// The renderer's font size: DPI-scaled, times the overall scale setting.
+fn font_size(cfg: &Config) -> i32 {
+    (font_px(cfg.font.size) as f32 * cfg.general.scale)
+        .round()
+        .max(4.0) as i32
+}
+
+/// A setting as it should appear in the config: 3 decimals, not the f32-to-f64 artifact
+/// (0.3 would otherwise be saved as 0.30000001192092896).
+fn decimal(v: f32) -> f64 {
+    (v as f64 * 1000.0).round() / 1000.0
+}
+
 /// Persist a tray choice; failure only costs the setting surviving a restart.
 fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
     if let Err(e) = config::save(section, key, value) {
@@ -374,6 +494,8 @@ pub fn run() -> Result<()> {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
+    config::migrate();
+    crate::autostart::migrate();
     let (cfg, warnings) = config::load();
     for w in &warnings {
         eprintln!("config: {w}");
@@ -383,7 +505,7 @@ pub fn run() -> Result<()> {
     let t = &THEMES[theme::index_of(&cfg.theme.name)];
     let renderer = Renderer::new(
         &cfg.font.family,
-        font_px(cfg.font.size),
+        font_size(&cfg),
         t.bg,
         if anim.warm() { &t.warm } else { &t.cool },
         cfg.theme.glass,
@@ -418,7 +540,7 @@ pub fn run() -> Result<()> {
 
         let result = (|| -> Result<()> {
             let hinst = GetModuleHandleW(None)?;
-            let class = w!("AsciiWallpaper");
+            let class = w!("WallMotion");
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(wndproc),
                 hInstance: hinst.into(),
@@ -434,7 +556,7 @@ pub fn run() -> Result<()> {
                 // Layered: required to render under a WS_EX_NOREDIRECTIONBITMAP Progman.
                 WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 class,
-                w!("ascii-wallpaper"),
+                w!("WallMotion"),
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                 x,
                 y,
@@ -469,6 +591,11 @@ pub fn run() -> Result<()> {
                     if msg.message == WM_QUIT {
                         break 'pump;
                     }
+                    // Tab / arrow / Esc navigation for the settings window's controls.
+                    let dialog = settings::window();
+                    if !dialog.is_invalid() && IsDialogMessageW(dialog, &msg).as_bool() {
+                        continue;
+                    }
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
@@ -482,6 +609,22 @@ pub fn run() -> Result<()> {
     }
 }
 
+/// The local time (no seconds) and long date, in the user's regional format.
+fn local_clock() -> [String; 2] {
+    let (mut time, mut date) = ([0u16; 64], [0u16; 128]);
+    // SAFETY: the buffers are live locals; null locale/time/format mean the user's
+    // default locale, the current time and the locale's own format.
+    let (t, d) = unsafe {
+        (
+            GetTimeFormatEx(None, TIME_NOSECONDS, None, None, Some(&mut time)),
+            GetDateFormatEx(None, DATE_LONGDATE, None, None, Some(&mut date), None),
+        )
+    };
+    // Lengths include the terminating NUL; 0 means failure.
+    let text = |buf: &[u16], n: i32| String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize]);
+    [text(&time, t), text(&date, d)]
+}
+
 /// Show a fatal error. Release builds have no console, so use a message box.
 pub fn fatal(text: &str) {
     let body: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -490,7 +633,7 @@ pub fn fatal(text: &str) {
         MessageBoxW(
             None,
             windows::core::PCWSTR(body.as_ptr()),
-            w!("ascii-wallpaper"),
+            w!("WallMotion"),
             MB_OK | MB_ICONERROR,
         );
     }

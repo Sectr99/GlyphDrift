@@ -20,4 +20,13 @@ pub enum Shape {
     },
     /// Filled polygon, closed automatically. Needs at least 3 points.
     Polygon { points: Vec<(f32, f32)>, level: u8 },
+    /// One line of text centered on `c`. `size` is the em height in px; `weight` is a
+    /// font weight (300 light, 400 regular).
+    Text {
+        c: (f32, f32),
+        size: f32,
+        weight: u16,
+        text: String,
+        level: u8,
+    },
 }

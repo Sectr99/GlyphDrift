@@ -1,4 +1,4 @@
-//! ASCII live wallpaper.
+//! WallMotion: a live wallpaper for Windows.
 //!
 //! Portable core (`grid`, `anim`, `config`, `theme`, `icon`, `shape`) builds and tests on any platform.
 //! Windows-only host code (`desktop`, `render`, `tray`, `power`, `autostart`, `app`) is cfg-gated.
@@ -20,5 +20,7 @@ pub mod desktop;
 pub mod power;
 #[cfg(windows)]
 pub mod render;
+#[cfg(windows)]
+pub mod settings;
 #[cfg(windows)]
 pub mod tray;

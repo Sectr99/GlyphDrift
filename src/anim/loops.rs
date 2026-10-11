@@ -34,7 +34,6 @@ impl Clock {
     }
 }
 
-
 /// Line-weight tiers in px at a 1000 px screen; `Pen` scales them to the real size.
 pub(super) const HERO: f32 = 2.4;
 pub(super) const MID: f32 = 1.3;
@@ -59,12 +58,12 @@ fn ramp(a: f32, b: f32, x: f32) -> f32 {
 /// asymmetric to balance the shift (the globe's guide arc and orbit); balanced ones use
 /// `optical_center`, since an unjustified offset reads as a mistake.
 fn anchor(f: Rect) -> ((f32, f32), f32) {
-    ((f.x + f.w * 0.56, f.y + f.h * 0.47), f.unit())
+    ((f.x + f.w * 0.56, f.y + f.h * 0.47), f.object_unit())
 }
 
 /// Horizontally centered, slightly high so the object doesn't appear to sag.
 pub(super) fn optical_center(f: Rect) -> ((f32, f32), f32) {
-    ((f.x + f.w * 0.5, f.y + f.h * 0.47), f.unit())
+    ((f.x + f.w * 0.5, f.y + f.h * 0.47), f.object_unit())
 }
 
 /// Rotate screen offset (dx, dy) by `angle` about `c`.

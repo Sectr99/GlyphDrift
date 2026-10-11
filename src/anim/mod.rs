@@ -31,19 +31,46 @@ pub use wind::Wind;
 use crate::grid::Grid;
 use crate::shape::Shape;
 
-/// A rectangle in window pixels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// A rectangle in window pixels, with the user's scale settings for sizes drawn in it.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Overall scale (settings: "Overall scale").
+    pub zoom: f32,
+    /// Extra scale for centered objects (settings: "Object scale").
+    pub object_zoom: f32,
 }
 
 impl Rect {
-    /// The smaller side: the scale unit for sizes, so features look the same on any aspect.
+    pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self {
+            x,
+            y,
+            w,
+            h,
+            zoom: 1.0,
+            object_zoom: 1.0,
+        }
+    }
+
+    /// The scale unit for sizes: the smaller side, so features look the same on any aspect,
+    /// times the overall scale.
     pub fn unit(&self) -> f32 {
-        self.w.min(self.h)
+        self.w.min(self.h) * self.zoom
+    }
+
+    /// The scale unit for centered objects: `unit` times the object scale.
+    pub fn object_unit(&self) -> f32 {
+        self.unit() * self.object_zoom
+    }
+}
+
+impl Default for Rect {
+    fn default() -> Self {
+        Self::new(0.0, 0.0, 0.0, 0.0)
     }
 }
 
@@ -69,12 +96,7 @@ impl Size {
             rows,
             width,
             height,
-            focus: Rect {
-                x: 0.0,
-                y: 0.0,
-                w: width,
-                h: height,
-            },
+            focus: Rect::new(0.0, 0.0, width, height),
         }
     }
 }
@@ -100,6 +122,9 @@ pub trait Animation {
     }
     /// Append the current frame's vector shapes. Grid-only animations draw none.
     fn draw(&self, _out: &mut Vec<Shape>) {}
+    /// The local time and long date to show, or None for no clock. Called every frame;
+    /// only animations with a clock area use it.
+    fn set_clock(&mut self, _clock: Option<&[String; 2]>) {}
 }
 
 /// (config name, menu label, menu group); the tray separates groups.
@@ -242,12 +267,7 @@ mod tests {
             rows: 135,
             width: 3840.0,
             height: 2160.0,
-            focus: Rect {
-                x: 0.0,
-                y: 0.0,
-                w: 3840.0,
-                h: 2160.0,
-            },
+            focus: Rect::new(0.0, 0.0, 3840.0, 2160.0),
         };
         for &(name, ..) in ANIMATIONS {
             let mut a = by_name(name, " .:-=+*#%@");
@@ -272,12 +292,7 @@ mod tests {
             rows: 70,
             width: 3200.0,
             height: 1000.0,
-            focus: Rect {
-                x: 1600.0,
-                y: 0.0,
-                w: 1600.0,
-                h: 1000.0,
-            },
+            focus: Rect::new(1600.0, 0.0, 1600.0, 1000.0),
         };
         let xs = |name: &str| -> Vec<f32> {
             let mut a = by_name(name, " .:-=+*#%@");
@@ -291,6 +306,7 @@ mod tests {
                     Shape::Line { a, b, .. } => (a.0 + b.0) / 2.0,
                     Shape::Circle { c, .. } => c.0,
                     Shape::Polygon { points, .. } => points[0].0,
+                    Shape::Text { c, .. } => c.0,
                 })
                 .collect()
         };

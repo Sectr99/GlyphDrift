@@ -29,6 +29,7 @@ use objc2_foundation::{
 
 use crate::anim::{self, Animation};
 use crate::config::{self, Config};
+use crate::engine::{self, save};
 use crate::grid::Grid;
 use crate::shape::Shape;
 use crate::theme::{self, THEMES};
@@ -94,17 +95,17 @@ impl App {
     }
 
     fn fps(&self) -> u32 {
-        match self.cfg.general.fps {
-            0 => self.surfaces.first().map_or(24, |s| s.anim.fps()),
-            n => n,
-        }
+        engine::frame_rate(
+            &self.cfg,
+            self.surfaces.first().map_or(24, |s| s.anim.fps()),
+        )
     }
 
     fn interval(&self) -> f64 {
         if self.paused() {
             PAUSED_INTERVAL
         } else {
-            1.0 / self.fps().max(1) as f64
+            1.0 / self.fps() as f64
         }
     }
 
@@ -248,16 +249,6 @@ impl App {
         }
     }
 
-    /// The font and overall scale changed: re-measure, then re-lay out.
-    fn rebuild_renderer(&mut self) {
-        self.renderer.set_font(
-            &self.cfg.font.family,
-            font_size(&self.cfg),
-            self.renderer_scale,
-        );
-        self.layout();
-    }
-
     /// Push the theme's colors (warm or cool, per animation) to the renderer and windows.
     fn apply_colors(&mut self) {
         let t = self.theme();
@@ -300,55 +291,36 @@ impl App {
 
     /// Apply a setting live; with `commit`, save it too.
     fn tweak(&mut self, id: usize, value: f32, commit: bool) {
-        match id {
-            ui::SPEED => {
-                self.cfg.general.speed = value.clamp(0.1, 4.0);
-                if commit {
-                    save("general", "speed", decimal(self.cfg.general.speed));
-                }
+        let changed = engine::tweak(&mut self.cfg, id, value, commit);
+        self.apply(changed);
+    }
+
+    /// Act on what a setting or config edit changed.
+    fn apply(&mut self, c: engine::Changed) {
+        if c.font {
+            self.renderer.set_font(
+                &self.cfg.font.family,
+                font_size(&self.cfg),
+                self.renderer_scale,
+            );
+        }
+        if c.animation {
+            for s in &mut self.surfaces {
+                s.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
             }
-            ui::FPS => {
-                self.cfg.general.fps = value.round().clamp(0.0, 60.0) as u32;
-                self.restart_timer();
-                if commit {
-                    save("general", "fps", self.cfg.general.fps as i64);
-                }
-            }
-            ui::GLASS => {
-                self.cfg.theme.glass = value.clamp(0.0, 0.9);
-                self.apply_colors();
-                if commit {
-                    save("theme", "glass", decimal(self.cfg.theme.glass));
-                }
-            }
-            ui::SCALE => {
-                let scale = value.clamp(0.5, 2.0);
-                if scale != self.cfg.general.scale {
-                    self.cfg.general.scale = scale;
-                    self.rebuild_renderer(); // the font size follows the scale
-                }
-                if commit {
-                    save("general", "scale", decimal(scale));
-                }
-            }
-            ui::OBJECT_SCALE => {
-                let scale = value.clamp(0.5, 2.0);
-                if scale != self.cfg.general.object_scale {
-                    self.cfg.general.object_scale = scale;
-                    self.layout();
-                }
-                if commit {
-                    save("general", "object_scale", decimal(scale));
-                }
-            }
-            ui::CLOCK => {
-                self.cfg.general.clock = value > 0.5;
-                self.render_frame();
-                if commit {
-                    save("general", "clock", self.cfg.general.clock);
-                }
-            }
-            _ => {}
+        }
+        if c.menu_bar {
+            self.rebuild_surfaces(); // window height changes; lays out too
+        } else if c.font || c.animation || c.layout {
+            self.layout(); // new cell size, animation or object size
+        } else if c.frame {
+            self.render_frame();
+        }
+        if c.colors || c.animation {
+            self.apply_colors(); // warm or cool gradient follows the animation
+        }
+        if c.frame_rate {
+            self.restart_timer();
         }
     }
 
@@ -364,33 +336,7 @@ impl App {
             log!("config: {w}");
         }
         let old = std::mem::replace(&mut self.cfg, cfg);
-        let new_font = (&old.font.family, old.font.size, old.general.scale)
-            != (
-                &self.cfg.font.family,
-                self.cfg.font.size,
-                self.cfg.general.scale,
-            );
-        let new_anim = (&old.general.animation, &old.theme.ramp)
-            != (&self.cfg.general.animation, &self.cfg.theme.ramp);
-        if new_font {
-            self.renderer.set_font(
-                &self.cfg.font.family,
-                font_size(&self.cfg),
-                self.renderer_scale,
-            );
-        }
-        if new_anim {
-            for s in &mut self.surfaces {
-                s.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
-            }
-        }
-        if old.general.match_menu_bar != self.cfg.general.match_menu_bar {
-            self.rebuild_surfaces(); // window height changes; lays out too
-        } else if new_font || new_anim || old.general.object_scale != self.cfg.general.object_scale
-        {
-            self.layout(); // new cell size or animation
-        }
-        self.apply_colors();
+        self.apply(engine::reloaded(&old, &self.cfg));
         settings::refresh(self);
         true
     }
@@ -427,14 +373,7 @@ impl App {
 
     /// Menu bar hover text: animation and theme, or why it's paused.
     fn update_status(&self) {
-        let tip = if self.user_paused {
-            "Glyphdrift: paused".to_string()
-        } else if let Some(reason) = self.auto_paused {
-            format!("Glyphdrift: paused while {reason}")
-        } else {
-            let anim = anim::ANIMATIONS[anim::index_of(&self.cfg.general.animation)].1;
-            format!("Glyphdrift: {anim} · {}", self.theme().label)
-        };
+        let tip = engine::status(&self.cfg, self.user_paused, self.auto_paused);
         self.status.set(&tip, self.paused());
     }
 
@@ -632,37 +571,11 @@ impl Controller {
     }
 }
 
-/// A setting as the settings window shows it.
-fn tweak_value(cfg: &Config, id: usize) -> f32 {
-    let g = &cfg.general;
-    match id {
-        ui::SPEED => g.speed,
-        ui::FPS => g.fps as f32,
-        ui::GLASS => cfg.theme.glass,
-        ui::SCALE => g.scale,
-        ui::OBJECT_SCALE => g.object_scale,
-        ui::CLOCK => f32::from(u8::from(g.clock)),
-        _ => 0.0,
-    }
-}
-
 /// The renderer's font size in points, times the overall scale.
 fn font_size(cfg: &Config) -> f64 {
     (cfg.font.size as f64 * cfg.general.scale as f64)
         .round()
         .max(4.0)
-}
-
-/// Rounded to 3 decimals for the config (0.3f32 would save as 0.30000001192092896).
-fn decimal(v: f32) -> f64 {
-    (v as f64 * 1000.0).round() / 1000.0
-}
-
-/// Save a setting; a failure only loses it on restart.
-fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
-    if let Err(e) = config::save(section, key, value) {
-        log!("config: could not save {section}.{key}: {e}");
-    }
 }
 
 thread_local! {

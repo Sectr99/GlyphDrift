@@ -34,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::anim::{self, Animation};
 use crate::config::{self, Config};
 use crate::desktop;
+use crate::engine::{self, save};
 use crate::grid::Grid;
 use crate::power;
 use crate::render::Renderer;
@@ -132,11 +133,7 @@ impl App {
         if self.paused() {
             PAUSED_INTERVAL_MS
         } else {
-            let fps = match self.cfg.general.fps {
-                0 => self.anim.fps(),
-                n => n,
-            };
-            1000 / fps.max(1)
+            1000 / engine::frame_rate(&self.cfg, self.anim.fps())
         }
     }
 
@@ -175,88 +172,41 @@ impl App {
         self.anim.draw(&mut self.shapes);
     }
 
-    /// New renderer for the font and overall scale, then re-lay out.
-    fn rebuild_renderer(&mut self) {
-        let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
-        match Renderer::new(
-            &self.cfg.font.family,
-            font_size(&self.cfg),
-            t.bg,
-            &t.cool,
-            0.0,
-        ) {
-            Ok(r) => self.renderer = r,
-            Err(e) => log!("render: rebuild failed: {e}"),
-        }
-        self.apply_colors();
-        self.resize(self.width, self.height);
-    }
-
-    /// A setting as the settings window shows it.
-    fn tweak_value(&self, id: usize) -> f32 {
-        let g = &self.cfg.general;
-        match id {
-            settings::SPEED => g.speed,
-            settings::FPS => g.fps as f32,
-            settings::GLASS => self.cfg.theme.glass,
-            settings::SCALE => g.scale,
-            settings::OBJECT_SCALE => g.object_scale,
-            settings::CLOCK => f32::from(u8::from(g.clock)),
-            _ => 0.0,
-        }
-    }
-
     /// Apply a setting live; with `commit`, save it too.
     fn tweak(&mut self, id: usize, value: f32, commit: bool) {
-        match id {
-            settings::SPEED => {
-                self.cfg.general.speed = value.clamp(0.1, 4.0);
-                if commit {
-                    save("general", "speed", decimal(self.cfg.general.speed));
-                }
+        let changed = engine::tweak(&mut self.cfg, id, value, commit);
+        self.apply(changed);
+    }
+
+    /// Act on what a setting or config edit changed.
+    fn apply(&mut self, c: engine::Changed) {
+        if c.font {
+            let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
+            match Renderer::new(
+                &self.cfg.font.family,
+                font_size(&self.cfg),
+                t.bg,
+                &t.cool,
+                0.0,
+            ) {
+                Ok(r) => self.renderer = r,
+                Err(e) => log!("render: rebuild failed: {e}"),
             }
-            settings::FPS => {
-                self.cfg.general.fps = value.round().clamp(0.0, 60.0) as u32;
-                self.timer.set(self.interval_ms());
-                if commit {
-                    save("general", "fps", self.cfg.general.fps as i64);
-                }
-            }
-            settings::GLASS => {
-                self.cfg.theme.glass = value.clamp(0.0, 0.9);
-                self.apply_colors();
-                if commit {
-                    save("theme", "glass", decimal(self.cfg.theme.glass));
-                }
-            }
-            settings::SCALE => {
-                let scale = value.clamp(0.5, 2.0);
-                if scale != self.cfg.general.scale {
-                    self.cfg.general.scale = scale;
-                    self.rebuild_renderer(); // the font size follows the scale
-                }
-                if commit {
-                    save("general", "scale", decimal(scale));
-                }
-            }
-            settings::OBJECT_SCALE => {
-                let scale = value.clamp(0.5, 2.0);
-                if scale != self.cfg.general.object_scale {
-                    self.cfg.general.object_scale = scale;
-                    self.resize(self.width, self.height);
-                }
-                if commit {
-                    save("general", "object_scale", decimal(scale));
-                }
-            }
-            settings::CLOCK => {
-                self.cfg.general.clock = value > 0.5;
-                self.render_frame();
-                if commit {
-                    save("general", "clock", self.cfg.general.clock);
-                }
-            }
-            _ => {}
+        }
+        if c.animation {
+            self.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
+        }
+        // Colors before the resize below, which renders: a new renderer starts uncolored.
+        if c.colors || c.font || c.animation {
+            self.apply_colors();
+        }
+        if c.font || c.animation || c.layout {
+            self.resize(self.width, self.height); // new cell size, animation or object size
+        } else if c.frame {
+            self.render_frame();
+        }
+        if c.frame_rate {
+            self.timer.set(self.interval_ms());
         }
     }
 
@@ -279,36 +229,7 @@ impl App {
             log!("config: {w}");
         }
         let old = std::mem::replace(&mut self.cfg, cfg);
-        let (new_font, new_anim) = (
-            (&old.font.family, old.font.size, old.general.scale)
-                != (
-                    &self.cfg.font.family,
-                    self.cfg.font.size,
-                    self.cfg.general.scale,
-                ),
-            (&old.general.animation, &old.theme.ramp)
-                != (&self.cfg.general.animation, &self.cfg.theme.ramp),
-        );
-        if new_font {
-            let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
-            match Renderer::new(
-                &self.cfg.font.family,
-                font_size(&self.cfg),
-                t.bg,
-                &t.cool,
-                0.0,
-            ) {
-                Ok(r) => self.renderer = r,
-                Err(e) => log!("config: font change failed: {e}"),
-            }
-        }
-        if new_anim {
-            self.anim = anim::by_name(&self.cfg.general.animation, &self.cfg.theme.ramp);
-        }
-        if new_font || new_anim || old.general.object_scale != self.cfg.general.object_scale {
-            self.resize(self.width, self.height); // new cell size or animation
-        }
-        self.apply_colors();
+        self.apply(engine::reloaded(&old, &self.cfg));
         true
     }
 
@@ -333,15 +254,7 @@ impl App {
 
     /// Tray hover text: animation and theme, or why it's paused.
     fn update_tray(&self) {
-        let tip = if self.user_paused {
-            "Glyphdrift: paused".to_string()
-        } else if let Some(reason) = self.auto_paused {
-            format!("Glyphdrift: paused while {reason}")
-        } else {
-            let anim = anim::ANIMATIONS[anim::index_of(&self.cfg.general.animation)].1;
-            let theme = THEMES[theme::index_of(&self.cfg.theme.name)].label;
-            format!("Glyphdrift: {anim} · {theme}")
-        };
+        let tip = engine::status(&self.cfg, self.user_paused, self.auto_paused);
         tray::set_status(self.tray, &tip, self.paused(), self.user_paused);
     }
 }
@@ -465,7 +378,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(0)
         }
         settings::WM_GET_TWEAK => match app_of(hwnd) {
-            Some(app) => LRESULT((app.tweak_value(wp.0) * 1000.0).round() as isize),
+            Some(app) => LRESULT((engine::tweak_value(&app.cfg, wp.0) * 1000.0).round() as isize),
             None => LRESULT(0),
         },
         tray::WM_TOGGLE_PAUSE => {
@@ -501,18 +414,6 @@ fn font_size(cfg: &Config) -> i32 {
     (font_px(cfg.font.size) as f32 * cfg.general.scale)
         .round()
         .max(4.0) as i32
-}
-
-/// Rounded to 3 decimals for the config (0.3f32 would save as 0.30000001192092896).
-fn decimal(v: f32) -> f64 {
-    (v as f64 * 1000.0).round() / 1000.0
-}
-
-/// Save a setting; a failure only loses it on restart.
-fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
-    if let Err(e) = config::save(section, key, value) {
-        log!("config: could not save {section}.{key}: {e}");
-    }
 }
 
 unsafe fn on_display_change(hwnd: HWND, app: &App) {

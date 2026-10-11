@@ -1,4 +1,4 @@
-//! Grid renderer: Direct2D + DirectWrite.
+﻿//! Grid renderer: Direct2D + DirectWrite.
 //!
 //! All cells of one brightness level go out in a single `DrawGlyphRun`, each glyph placed
 //! with a glyph offset, so a frame is at most `LEVELS` draw calls. A DC render target
@@ -14,8 +14,8 @@ use crate::theme;
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,
-    D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW,
+    D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
@@ -301,7 +301,10 @@ impl Renderer {
                 drop(ManuallyDrop::into_inner(run.fontFace));
             }
             let pt = |p: (f32, f32)| D2D_POINT_2F { x: p.0, y: p.1 };
-            for s in shapes {
+            let mut i = 0;
+            while i < shapes.len() {
+                let s = &shapes[i];
+                i += 1;
                 match *s {
                     Shape::Polygon { ref points, level } if level > 0 && points.len() >= 3 => {
                         // ponytail: one path geometry per polygon per frame; cache if a
@@ -316,8 +319,45 @@ impl Renderer {
                         t.rt.FillGeometry(&geom, &t.brushes[level_index(level)], None);
                     }
                     Shape::Line { a, b, width, level } if level > 0 => {
-                        let brush = &t.brushes[level_index(level)];
-                        t.rt.DrawLine(pt(a), pt(b), brush, width, None);
+                        // Consecutive lines that look the same go out as one path: one draw
+                        // call instead of thousands for the contour animations. Only
+                        // consecutive ones, so the drawing order (occlusion) is unchanged.
+                        let color = level_index(level);
+                        let start = i - 1;
+                        while let Some(Shape::Line {
+                            width: w, level: l, ..
+                        }) = shapes.get(i)
+                        {
+                            if *w != width || *l == 0 || level_index(*l) != color {
+                                break;
+                            }
+                            i += 1;
+                        }
+                        let brush = &t.brushes[color];
+                        if i - start == 1 {
+                            t.rt.DrawLine(pt(a), pt(b), brush, width, None);
+                            continue;
+                        }
+                        let geom = self.factory.CreatePathGeometry()?;
+                        let sink = geom.Open()?;
+                        let mut end: Option<(f32, f32)> = None;
+                        for line in &shapes[start..i] {
+                            let Shape::Line { a, b, .. } = *line else {
+                                continue;
+                            };
+                            // Segments that continue the previous one extend its figure.
+                            if end != Some(a) {
+                                if end.is_some() {
+                                    sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                                }
+                                sink.BeginFigure(pt(a), D2D1_FIGURE_BEGIN_HOLLOW);
+                            }
+                            sink.AddLine(pt(b));
+                            end = Some(b);
+                        }
+                        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                        sink.Close()?;
+                        t.rt.DrawGeometry(&geom, brush, width, None);
                     }
                     Shape::Circle { c, r, fill, level } if level > 0 => {
                         let brush = &t.brushes[level_index(level)];

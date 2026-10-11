@@ -120,6 +120,11 @@ impl Animation for Flow {
     }
 
     fn draw(&self, out: &mut Vec<Shape>) {
+        // Segments grouped by brightness band (the renderer's 16 palette levels), dim to
+        // bright: trails don't occlude each other, and same-looking consecutive lines are
+        // drawn in one call. Brighter heads also end up on top where trails cross.
+        let mut bands: [Vec<Shape>; 16] = Default::default();
+        let width = 1.2 * self.scale.max(0.75);
         for p in &self.particles {
             // Fade in over the first second and out over the last.
             let life = p.age.min(p.life - p.age).clamp(0.0, 1.0);
@@ -127,14 +132,15 @@ impl Animation for Flow {
                 let tail = 1.0 - i as f32 / (TRAIL - 1) as f32;
                 let level = (life * tail * 210.0) as u8;
                 if level > 0 && seg[0] != seg[1] {
-                    out.push(Shape::Line {
+                    bands[level as usize / 16].push(Shape::Line {
                         a: seg[0],
                         b: seg[1],
-                        width: 1.2 * self.scale.max(0.75),
+                        width,
                         level,
                     });
                 }
             }
         }
+        out.extend(bands.into_iter().flatten());
     }
 }

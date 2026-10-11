@@ -233,6 +233,54 @@ mod tests {
         }
     }
 
+    /// Frame cost of each animation at 3440x1440 (update + render + draw, no painting), at
+    /// overall scale 1 or, with GLYPHDRIFT_SCALE=0.5, at that scale (smaller font, so more
+    /// character cells). Run with `cargo test --release frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn frame_cost() {
+        let zoom: f32 = std::env::var("GLYPHDRIFT_SCALE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1.0);
+        let size = Size {
+            cols: (430.0 / zoom) as usize,
+            rows: (90.0 / zoom) as usize,
+            width: 3440.0,
+            height: 1440.0,
+            focus: Rect {
+                zoom,
+                ..Rect::new(0.0, 0.0, 3440.0, 1440.0)
+            },
+        };
+        for &(name, ..) in ANIMATIONS {
+            let mut a = by_name(name, " .:-=+*#%@");
+            a.init(size, 7);
+            let mut g = Grid::new(size.cols, size.rows);
+            let mut shapes = Vec::new();
+            let frames = 60;
+            let (mut update, mut render, mut draw) = (0.0, 0.0, 0.0);
+            let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1000.0 / frames as f64;
+            for _ in 0..frames {
+                let t = std::time::Instant::now();
+                a.update(1.0 / 30.0);
+                update += ms(t);
+                let t = std::time::Instant::now();
+                a.render(&mut g);
+                render += ms(t);
+                let t = std::time::Instant::now();
+                shapes.clear();
+                a.draw(&mut shapes);
+                draw += ms(t);
+            }
+            println!(
+                "{name:>13}: {:6.2} ms/frame (update {update:5.2}, grid {render:5.2}, shapes {draw:5.2}), {:6} shapes",
+                update + render + draw,
+                shapes.len()
+            );
+        }
+    }
+
     #[test]
     fn every_animation_stays_bounded_at_4k() {
         // Small test grids once hid a draw loop that never ended at full-screen coordinates.

@@ -4,6 +4,12 @@
 use super::rng::hash3;
 
 type P = (f32, f32);
+/// A line segment between two points.
+pub type Segment = (P, P);
+
+/// Smallest sample spacing (px) for contour fields drawn at small scales. Finer grids cost
+/// quadratically more and look no smoother.
+pub const MIN_CELL: f32 = 8.0;
 
 /// A scalar field sampled on a regular grid of `nx` x `ny` vertices, `cell` px apart.
 pub struct Field {
@@ -38,58 +44,114 @@ impl Field {
         self.values[j * self.nx + i]
     }
 
+    /// The field at any point (px), bilinearly interpolated; clamped at the edges.
+    pub fn value_at(&self, x: f32, y: f32) -> f32 {
+        let fx = (x / self.cell).clamp(0.0, (self.nx - 1) as f32);
+        let fy = (y / self.cell).clamp(0.0, (self.ny - 1) as f32);
+        let (i, j) = (
+            (fx as usize).min(self.nx.saturating_sub(2)),
+            (fy as usize).min(self.ny.saturating_sub(2)),
+        );
+        let (u, v) = (fx - i as f32, fy - j as f32);
+        let (i1, j1) = ((i + 1).min(self.nx - 1), (j + 1).min(self.ny - 1));
+        let top = self.at(i, j) + (self.at(i1, j) - self.at(i, j)) * u;
+        let bottom = self.at(i, j1) + (self.at(i1, j1) - self.at(i, j1)) * u;
+        top + (bottom - top) * v
+    }
+
     /// Call `emit(a, b)` for every segment of the iso-line where the field equals `level`.
-    /// Saddle cells are resolved by the cell's center value.
     pub fn contour(&self, level: f32, mut emit: impl FnMut(P, P)) {
         for j in 0..self.ny.saturating_sub(1) {
             for i in 0..self.nx.saturating_sub(1) {
-                let (tl, tr) = (self.at(i, j), self.at(i + 1, j));
-                let (br, bl) = (self.at(i + 1, j + 1), self.at(i, j + 1));
-                let case = (usize::from(tl > level) << 3)
-                    | (usize::from(tr > level) << 2)
-                    | (usize::from(br > level) << 1)
-                    | usize::from(bl > level);
-                if case == 0 || case == 15 {
-                    continue;
-                }
-                let (x, y, c) = (i as f32 * self.cell, j as f32 * self.cell, self.cell);
-                // Where the level crosses an edge between values a and b.
-                let cross = |a: f32, b: f32| ((level - a) / (b - a)).clamp(0.0, 1.0);
-                let top = (x + c * cross(tl, tr), y);
-                let right = (x + c, y + c * cross(tr, br));
-                let bottom = (x + c * cross(bl, br), y + c);
-                let left = (x, y + c * cross(tl, bl));
-                let center_above = (tl + tr + br + bl) / 4.0 > level;
-                match case {
-                    1 | 14 => emit(left, bottom),
-                    2 | 13 => emit(bottom, right),
-                    3 | 12 => emit(left, right),
-                    4 | 11 => emit(top, right),
-                    6 | 9 => emit(top, bottom),
-                    7 | 8 => emit(top, left),
-                    5 => {
-                        // tr and bl above.
-                        if center_above {
-                            emit(top, left);
-                            emit(bottom, right);
-                        } else {
-                            emit(top, right);
-                            emit(left, bottom);
-                        }
+                self.cell(i, j, level, &mut emit);
+            }
+        }
+    }
+
+    /// Call `emit(k, a, b)` for every segment of every iso-line `levels[k]`. `levels` must be
+    /// ascending. One pass over the cells, each visiting only the levels that cross it:
+    /// much cheaper than `contour` per level when there are many levels.
+    pub fn contours(&self, levels: &[f32], mut emit: impl FnMut(usize, P, P)) {
+        for j in 0..self.ny.saturating_sub(1) {
+            for i in 0..self.nx.saturating_sub(1) {
+                let v = [
+                    self.at(i, j),
+                    self.at(i + 1, j),
+                    self.at(i + 1, j + 1),
+                    self.at(i, j + 1),
+                ];
+                let lo = v.iter().copied().fold(f32::INFINITY, f32::min);
+                let hi = v.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                // A level crosses the cell if some corners are above it and some aren't.
+                let first = levels.partition_point(|&l| l < lo);
+                for (k, &level) in levels.iter().enumerate().skip(first) {
+                    if level >= hi {
+                        break;
                     }
-                    10 => {
-                        // tl and br above.
-                        if center_above {
-                            emit(top, right);
-                            emit(left, bottom);
-                        } else {
-                            emit(top, left);
-                            emit(bottom, right);
-                        }
-                    }
-                    _ => {}
+                    self.cell(i, j, level, &mut |a, b| emit(k, a, b));
                 }
             }
+        }
+    }
+
+    /// The segments of every iso-line `levels[k]` (ascending), grouped by level: a level's
+    /// lines come out together, so a renderer can draw each group in one call.
+    pub fn segments_by_level(&self, levels: &[f32]) -> Vec<Vec<Segment>> {
+        let mut out = vec![Vec::new(); levels.len()];
+        self.contours(levels, |k, a, b| out[k].push((a, b)));
+        out
+    }
+
+    /// Marching squares for one cell. Saddle cells are resolved by the cell's center value.
+    fn cell(&self, i: usize, j: usize, level: f32, emit: &mut impl FnMut(P, P)) {
+        let (tl, tr) = (self.at(i, j), self.at(i + 1, j));
+        let (br, bl) = (self.at(i + 1, j + 1), self.at(i, j + 1));
+        let case = (usize::from(tl > level) << 3)
+            | (usize::from(tr > level) << 2)
+            | (usize::from(br > level) << 1)
+            | usize::from(bl > level);
+        if case == 0 || case == 15 {
+            return;
+        }
+        let (x, y, c) = (i as f32 * self.cell, j as f32 * self.cell, self.cell);
+        // The far edges as (i + 1) * cell, not x + cell, so neighbors sharing an edge get
+        // bit-identical points (and the renderer joins their segments).
+        let (x1, y1) = ((i + 1) as f32 * self.cell, (j + 1) as f32 * self.cell);
+        // Where the level crosses an edge between values a and b.
+        let cross = |a: f32, b: f32| ((level - a) / (b - a)).clamp(0.0, 1.0);
+        let top = (x + c * cross(tl, tr), y);
+        let right = (x1, y + c * cross(tr, br));
+        let bottom = (x + c * cross(bl, br), y1);
+        let left = (x, y + c * cross(tl, bl));
+        let center_above = (tl + tr + br + bl) / 4.0 > level;
+        match case {
+            1 | 14 => emit(left, bottom),
+            2 | 13 => emit(bottom, right),
+            3 | 12 => emit(left, right),
+            4 | 11 => emit(top, right),
+            6 | 9 => emit(top, bottom),
+            7 | 8 => emit(top, left),
+            5 => {
+                // tr and bl above.
+                if center_above {
+                    emit(top, left);
+                    emit(bottom, right);
+                } else {
+                    emit(top, right);
+                    emit(left, bottom);
+                }
+            }
+            10 => {
+                // tl and br above.
+                if center_above {
+                    emit(top, right);
+                    emit(left, bottom);
+                } else {
+                    emit(top, left);
+                    emit(bottom, right);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -126,6 +188,31 @@ pub fn fbm3(x: f32, y: f32, z: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn value_at_interpolates_between_samples() {
+        let f = Field::sample(100.0, 100.0, 10.0, |x, y| x + 2.0 * y);
+        for (x, y) in [(0.0, 0.0), (15.0, 25.0), (99.0, 3.0), (100.0, 100.0)] {
+            assert!(
+                (f.value_at(x, y) - (x + 2.0 * y)).abs() < 1e-3,
+                "({x}, {y})"
+            );
+        }
+        assert_eq!(f.value_at(-50.0, 0.0), 0.0); // clamped
+    }
+
+    #[test]
+    fn contours_match_contour_per_level() {
+        let f = Field::sample(120.0, 90.0, 6.0, |x, y| fbm3(x / 40.0, y / 40.0, 0.3));
+        let levels = [-0.5, -0.2, 0.0, 0.1, 0.4];
+        let mut multi = vec![Vec::new(); levels.len()];
+        f.contours(&levels, |k, a, b| multi[k].push((a, b)));
+        for (k, &level) in levels.iter().enumerate() {
+            let mut single = Vec::new();
+            f.contour(level, |a, b| single.push((a, b)));
+            assert_eq!(single, multi[k], "level {level}");
+        }
+    }
 
     #[test]
     fn contour_of_a_disc_is_closed_and_on_the_circle() {

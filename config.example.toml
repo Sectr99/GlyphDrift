@@ -2,7 +2,7 @@
 # Changes made in the Settings window and tray menu are saved back into this file.
 
 [general]
-fps = 0                       # 0 = auto (24 ASCII, 30 graphics), else 1..=60
+fps = 0                       # 0 = auto (24 ASCII, 30 graphics and loops, 20 fluid and contour), else 1..=60
 animation = "matrix"          # matrix | plasma | fire | waves | ripples | wind
                               # graphics (30 fps): constellation | flow
                               # loops (30 fps): helix | globe | dotwave | cubes | sunburst | moon

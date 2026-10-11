@@ -5,7 +5,7 @@
 
 use std::f32::consts::TAU;
 
-use super::contour::{fbm3, noise3, Field};
+use super::contour::{fbm3, noise3, Field, MIN_CELL};
 use super::loops::{Pen, HAIR, MID};
 use super::rng::hash3;
 use super::{Animation, Rect, Size};
@@ -53,7 +53,7 @@ macro_rules! line_animation {
                 $name
             }
             fn fps(&self) -> u32 {
-                30
+                20 // slow drift; drawing is the expensive part, so fewer frames save the most
             }
             fn init(&mut self, size: Size, seed: u64) {
                 self.0.init(size, seed);
@@ -78,8 +78,8 @@ line_animation!(Interference, "interference");
 line_animation!(Hillshade, "hillshade");
 line_animation!(Dunes, "dunes");
 
-/// Draw every iso-line of `field` at `levels`, styling each with `style(index) -> (weight,
-/// brightness)`.
+/// Draw every iso-line of `field` at `levels` (ascending), styling each with
+/// `style(index) -> (weight, brightness)`.
 fn contours(
     out: &mut Vec<Shape>,
     pen: Pen,
@@ -87,16 +87,18 @@ fn contours(
     levels: &[f32],
     style: impl Fn(usize) -> (f32, u8),
 ) {
-    for (k, &level) in levels.iter().enumerate() {
-        let (weight, brightness) = style(k);
-        field.contour(level, |a, b| {
-            out.push(Shape::Line {
-                a,
-                b,
-                width: pen.px(weight),
-                level: brightness,
-            });
-        });
+    let styles: Vec<(f32, u8)> = (0..levels.len())
+        .map(|k| {
+            let (weight, brightness) = style(k);
+            (pen.px(weight), brightness)
+        })
+        .collect();
+    for (segments, &(width, level)) in field.segments_by_level(levels).iter().zip(&styles) {
+        out.extend(
+            segments
+                .iter()
+                .map(|&(a, b)| Shape::Line { a, b, width, level }),
+        );
     }
 }
 
@@ -183,11 +185,20 @@ fn systems(c: &Clock) -> Vec<(f32, f32, f32, f32)> {
 }
 
 impl Isobars {
-    fn pressure(&self, x: f32, y: f32) -> f32 {
+    /// Pressure at (x, y) given this frame's `systems`.
+    fn pressure(&self, systems: &[(f32, f32, f32, f32)], x: f32, y: f32) -> f32 {
         let unit = self.0.unit;
-        systems(&self.0)
+        systems
             .iter()
-            .map(|&(sx, sy, r, a)| a * (-((x - sx).powi(2) + (y - sy).powi(2)) / (r * r)).exp())
+            .map(|&(sx, sy, r, a)| {
+                let d2 = ((x - sx).powi(2) + (y - sy).powi(2)) / (r * r);
+                // Beyond 3 radii a system adds under 0.01%: skip the exp.
+                if d2 > 9.0 {
+                    0.0
+                } else {
+                    a * (-d2).exp()
+                }
+            })
             .sum::<f32>()
             + 0.12 * fbm3(x / (unit * 0.5), y / (unit * 0.5), self.0.t * 0.01)
     }
@@ -200,11 +211,12 @@ impl Isobars {
             return;
         }
         let (cw, ch) = (c.w / c.cols as f32, c.h / c.rows as f32);
-        for (x, y, _, a) in systems(c) {
+        let all = systems(c);
+        for &(x, y, _, a) in &all {
             if x < 0.0 || x > c.w {
                 continue;
             }
-            let hpa = 1013.0 + 22.0 * self.pressure(x, y);
+            let hpa = 1013.0 + 22.0 * self.pressure(&all, x, y);
             let label = format!("{} {:.0}", if a > 0.0 { 'H' } else { 'L' }, hpa);
             let (col, row) = ((x / cw) as isize - 1, (y / ch) as isize);
             for (i, chr) in label.chars().enumerate() {
@@ -228,7 +240,10 @@ impl Isobars {
     fn frame(&self, out: &mut Vec<Shape>) {
         let Clock { w, h, .. } = self.0;
         let pen = Pen::new(self.0.unit);
-        let field = Field::sample(w, h, pen.px(12.0), |x, y| self.pressure(x, y));
+        let all = systems(&self.0);
+        let field = Field::sample(w, h, pen.px(12.0).max(MIN_CELL), |x, y| {
+            self.pressure(&all, x, y)
+        });
         let levels: Vec<f32> = (-12..=12).map(|k| k as f32 * 2.0 / 22.0).collect();
         contours(out, pen, &field, &levels, |k| {
             let high = k as f32 / (levels.len() - 1) as f32;
@@ -258,7 +273,7 @@ impl WoodGrain {
             f.x + f.w * (0.5 + 0.15 * (t * 0.013).sin()),
             f.y + f.h * (0.5 + 0.1 * (t * 0.017).cos()),
         );
-        let field = Field::sample(w, h, pen.px(8.0), |x, y| {
+        let field = Field::sample(w, h, pen.px(8.0).max(MIN_CELL), |x, y| {
             let (dx, dy) = ((x - knot.0) / (unit * 2.6), (y - knot.1) / unit); // stretched along the grain
                                                                                // Warp streaked along the grain: long in x, short in y.
             let warp = 0.11 * fbm3(x / (unit * 0.9), y / (unit * 0.18), t * 0.015);
@@ -303,7 +318,7 @@ impl Interference {
             })
             .collect();
         let k = TAU / (unit * 0.12); // wavelength: 12% of the screen
-        let field = Field::sample(w, h, pen.px(7.0), |x, y| {
+        let field = Field::sample(w, h, pen.px(7.0).max(MIN_CELL), |x, y| {
             sources
                 .iter()
                 .map(|&(sx, sy)| (k * ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() - t * 0.8).cos())
@@ -317,17 +332,58 @@ impl Interference {
     }
 }
 
-/// Shade the character grid from a height function `h(x, y)` (screen px): each cell gets a
-/// glyph and brightness from how much the surface faces `light`. `relief` scales slopes
-/// (height units per px), `ambient` lifts faces turned away from the light, and
-/// `tint(height)` lightens high ground (0..1 factor).
+/// A height function sampled once at every character cell's center, with slopes from
+/// central differences between neighboring cells. For surfaces that are smooth at the
+/// cell scale, this is 5x cheaper than sampling around each cell.
+struct CellHeights {
+    cols: usize,
+    rows: usize,
+    cw: f32,
+    ch: f32,
+    v: Vec<f32>,
+}
+
+impl CellHeights {
+    fn sample(c: &Clock, h: impl Fn(f32, f32) -> f32) -> Self {
+        let (cols, rows) = (c.cols.max(1), c.rows.max(1));
+        let (cw, ch) = (c.w / cols as f32, c.h / rows as f32);
+        let mut v = Vec::with_capacity(cols * rows);
+        for row in 0..rows {
+            for col in 0..cols {
+                v.push(h((col as f32 + 0.5) * cw, (row as f32 + 0.5) * ch));
+            }
+        }
+        Self {
+            cols,
+            rows,
+            cw,
+            ch,
+            v,
+        }
+    }
+
+    /// (height, d/dx, d/dy) at a cell, slopes per px.
+    fn slope(&self, col: usize, row: usize) -> (f32, f32, f32) {
+        let at = |c: usize, r: usize| self.v[r * self.cols + c];
+        let (c0, c1) = (col.saturating_sub(1), (col + 1).min(self.cols - 1));
+        let (r0, r1) = (row.saturating_sub(1), (row + 1).min(self.rows - 1));
+        let dx = (at(c1, row) - at(c0, row)) / ((c1 - c0).max(1) as f32 * self.cw);
+        let dy = (at(col, r1) - at(col, r0)) / ((r1 - r0).max(1) as f32 * self.ch);
+        (at(col, row), dx, dy)
+    }
+}
+
+/// Shade the character grid from a surface: `surface(col, row, x, y)` gives the height and
+/// its slopes (per px) at each cell's center (x, y). Each cell gets a glyph and brightness
+/// from how much the surface faces `light`. `relief` scales slopes, `ambient` lifts faces
+/// turned away from the light, and `tint(height)` lightens high ground (0..1 factor).
 fn shade_cells(
     c: &Clock,
     grid: &mut Grid,
     relief: f32,
     light: (f32, f32, f32),
     ambient: f32,
-    h: impl Fn(f32, f32) -> f32,
+    surface: impl Fn(usize, usize, f32, f32) -> (f32, f32, f32),
     tint: impl Fn(f32) -> f32,
 ) {
     const RAMP: &[u8] = b" .,:;=+*#%";
@@ -339,12 +395,11 @@ fn shade_cells(
     for row in 0..grid.rows().min(c.rows) {
         for col in 0..grid.cols().min(c.cols) {
             let (x, y) = ((col as f32 + 0.5) * cw, (row as f32 + 0.5) * ch);
-            let (ex, ey) = (cw * 0.5, ch * 0.5);
-            let hx = (h(x + ex, y) - h(x - ex, y)) / (2.0 * ex) * relief;
-            let hy = (h(x, y + ey) - h(x, y - ey)) / (2.0 * ey) * relief;
+            let (height, hx, hy) = surface(col, row, x, y);
+            let (hx, hy) = (hx * relief, hy * relief);
             let len = (hx * hx + hy * hy + 1.0).sqrt();
             let lit = ((-hx * light.0 - hy * light.1 + light.2) / len).max(0.0);
-            let s = ((ambient + (1.0 - ambient) * lit) * tint(h(x, y))).clamp(0.0, 1.0);
+            let s = ((ambient + (1.0 - ambient) * lit) * tint(height)).clamp(0.0, 1.0);
             if s < 0.12 {
                 continue; // shadow stays dark
             }
@@ -380,13 +435,14 @@ impl Hillshade {
     /// little brighter.
     fn text(&self, grid: &mut Grid) {
         let unit = self.0.unit;
+        let heights = CellHeights::sample(&self.0, |x, y| self.height(x, y));
         shade_cells(
             &self.0,
             grid,
             unit * 0.6,
             light(-0.55, -0.55, 0.62),
             0.0,
-            |x, y| self.height(x, y),
+            |col, row, _, _| heights.slope(col, row),
             |h| 0.7 + 0.3 * (h + 1.0) / 2.0,
         );
     }
@@ -395,7 +451,7 @@ impl Hillshade {
     fn frame(&self, out: &mut Vec<Shape>) {
         let Clock { w, h, .. } = self.0;
         let pen = Pen::new(self.0.unit);
-        let field = Field::sample(w, h, pen.px(12.0), |x, y| self.height(x, y));
+        let field = Field::sample(w, h, pen.px(12.0).max(MIN_CELL), |x, y| self.height(x, y));
         let levels: Vec<f32> = (-8..=8).map(|k| k as f32 * 0.1).collect();
         contours(out, pen, &field, &levels, |k| {
             let high = k as f32 / (levels.len() - 1) as f32;
@@ -408,50 +464,121 @@ impl Hillshade {
     }
 }
 
+/// atan2 to within 0.004 rad, several times faster than `f32::atan2`; continuous, so it
+/// is safe for phase fields (Dune ripples call it four times per sample).
+fn fast_atan2(y: f32, x: f32) -> f32 {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+    let (ax, ay) = (x.abs(), y.abs());
+    if ax == 0.0 && ay == 0.0 {
+        return 0.0;
+    }
+    // atan(z) for z in [0, 1]: pi/4 z + 0.273 z (1 - z).
+    let atan01 = |z: f32| FRAC_PI_4 * z + 0.273 * z * (1.0 - z);
+    let a = if ay <= ax {
+        atan01(ay / ax)
+    } else {
+        FRAC_PI_2 - atan01(ax / ay)
+    };
+    let a = if x < 0.0 { PI - a } else { a };
+    if y < 0.0 {
+        -a
+    } else {
+        a
+    }
+}
+
+/// Dune-ripple quantities that change per frame but not per point.
+struct DuneFrame {
+    /// Ripple wavenumber (radians per px) and the across-wind direction.
+    k: f32,
+    dir: (f32, f32),
+    /// Phase dislocations: position (px) and charge (+1 or -1).
+    defects: Vec<(f32, f32, f32)>,
+}
+
 impl Dunes {
-    /// Ripple phase: crests run across the wind and migrate downwind; a slow warp bends them
-    /// and drifting dislocations (phase defects) make crests split and end.
-    fn phase(&self, x: f32, y: f32) -> f32 {
+    fn frame_state(&self) -> DuneFrame {
         let c = &self.0;
-        let unit = c.unit;
-        let k = TAU / (unit * 0.07); // ripple wavelength: 7% of the screen
         let wind = 0.5 + 0.1 * (c.t * 0.01).sin(); // crests run across the wind, on a diagonal
-        let along = x * wind.cos() + y * wind.sin();
-        let warp = 4.5 * noise3(x / (unit * 0.55), y / (unit * 0.55), c.t * 0.01);
-        let defects: f32 = (0..4)
+        let defects = (0..4)
             .map(|i| {
                 let r = |n: u32| rand01(i + 40, n);
-                let dx = x - c.w * (0.15 + 0.7 * r(1) + 0.05 * (c.t * 0.02 + TAU * r(2)).sin());
-                let dy = y - c.h * (0.15 + 0.7 * r(3) + 0.05 * (c.t * 0.017 + TAU * r(4)).cos());
+                let x = c.w * (0.15 + 0.7 * r(1) + 0.05 * (c.t * 0.02 + TAU * r(2)).sin());
+                let y = c.h * (0.15 + 0.7 * r(3) + 0.05 * (c.t * 0.017 + TAU * r(4)).cos());
                 let charge = if i % 2 == 0 { 1.0 } else { -1.0 }; // paired, so they balance
-                charge * dy.atan2(dx)
+                (x, y, charge)
             })
-            .sum();
-        k * along + warp + defects - c.t * 0.4
+            .collect();
+        DuneFrame {
+            // Ripple wavelength: 7% of the screen, but at least 70 px, so small scales don't
+            // multiply the crest lines (and their cost).
+            k: TAU / (c.unit * 0.07).max(70.0),
+            dir: (wind.cos(), wind.sin()),
+            defects,
+        }
+    }
+
+    /// The slow warp that bends the crests.
+    fn warp(&self, x: f32, y: f32) -> f32 {
+        let unit = self.0.unit;
+        4.5 * noise3(x / (unit * 0.55), y / (unit * 0.55), self.0.t * 0.01)
+    }
+
+    /// Big, slow dune swells under the ripples.
+    fn swell(&self, x: f32, y: f32) -> f32 {
+        let unit = self.0.unit;
+        15.0 * fbm3(x / (unit * 0.8), y / (unit * 0.8), self.0.t * 0.005)
+    }
+
+    /// Ripple phase and its gradient (per px), given the warp there and its gradient.
+    /// Crests run across the wind and migrate downwind; the warp bends them and the
+    /// dislocations make crests split and end.
+    fn phase(&self, d: &DuneFrame, x: f32, y: f32, warp: (f32, f32, f32)) -> (f32, f32, f32) {
+        let (mut f, mut fx, mut fy) = (
+            d.k * (x * d.dir.0 + y * d.dir.1) + warp.0 - self.0.t * 0.4,
+            d.k * d.dir.0 + warp.1,
+            d.k * d.dir.1 + warp.2,
+        );
+        for &(px, py, charge) in &d.defects {
+            let (dx, dy) = (x - px, y - py);
+            let r2 = (dx * dx + dy * dy).max(1.0);
+            f += charge * fast_atan2(dy, dx);
+            fx -= charge * dy / r2;
+            fy += charge * dx / r2;
+        }
+        (f, fx, fy)
     }
 
     /// Ripple profile from phase: a gentle windward slope and a steep lee face. Continuous
     /// across the defects' 2 pi jumps because it only depends on the phase through sines.
-    fn ripple(&self, x: f32, y: f32) -> f32 {
-        let f = self.phase(x, y);
+    fn ripple(f: f32) -> f32 {
         (f + 0.45 * f.sin()).sin()
     }
 
-    /// Ripples riding on big, slow dune swells.
-    fn height(&self, x: f32, y: f32) -> f32 {
-        let unit = self.0.unit;
-        15.0 * fbm3(x / (unit * 0.8), y / (unit * 0.8), self.0.t * 0.005) + 0.18 * self.ripple(x, y)
-    }
-
-    /// Shaded sand in ASCII under a low raking light, like late-afternoon sun.
+    /// Shaded sand in ASCII under a low raking light, like late-afternoon sun. The smooth
+    /// parts (swell, warp) come from per-cell samples; the sharp ripples from their exact
+    /// slope, which the cell spacing is too coarse to difference.
     fn text(&self, grid: &mut Grid) {
+        let d = self.frame_state();
+        let swell = CellHeights::sample(&self.0, |x, y| self.swell(x, y));
+        let warp = CellHeights::sample(&self.0, |x, y| self.warp(x, y));
         shade_cells(
             &self.0,
             grid,
             90.0,
             light(-0.85, -0.25, 0.45),
             0.2,
-            |x, y| self.height(x, y),
+            |col, row, x, y| {
+                let (f, fx, fy) = self.phase(&d, x, y, warp.slope(col, row));
+                // d/df sin(f + 0.45 sin f) = cos(f + 0.45 sin f) (1 + 0.45 cos f)
+                let dr = (f + 0.45 * f.sin()).cos() * (1.0 + 0.45 * f.cos());
+                let (s, sx, sy) = swell.slope(col, row);
+                (
+                    s + 0.18 * Self::ripple(f),
+                    sx + 0.18 * dr * fx,
+                    sy + 0.18 * dr * fy,
+                )
+            },
             |_| 1.0,
         );
     }
@@ -460,9 +587,35 @@ impl Dunes {
     fn frame(&self, out: &mut Vec<Shape>) {
         let Clock { w, h, .. } = self.0;
         let pen = Pen::new(self.0.unit);
+        let d = self.frame_state();
+        // The warp is smooth (features ~0.5 screen), so a coarse grid interpolates it well.
+        let warp = Field::sample(w, h, pen.px(48.0), |x, y| self.warp(x, y));
         // Traced a little below the top, where the band is wide enough for the sampling
         // grid to follow continuously: a thin outline along each crest.
-        let field = Field::sample(w, h, pen.px(6.0), |x, y| self.ripple(x, y));
+        // Finer than MIN_CELL: the crest band is about a quarter wavelength wide, and 5 px
+        // still resolves it at the smallest scale.
+        let field = Field::sample(w, h, pen.px(6.0).max(5.0), |x, y| {
+            let (f, _, _) = self.phase(&d, x, y, (warp.value_at(x, y), 0.0, 0.0));
+            Self::ripple(f)
+        });
         contours(out, pen, &field, &[0.75], |_| (HAIR, 150));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fast_atan2;
+
+    #[test]
+    fn fast_atan2_is_close_everywhere() {
+        let mut worst = 0.0f32;
+        for i in 0..3600 {
+            let t = i as f32 * std::f32::consts::TAU / 3600.0;
+            for r in [0.01f32, 1.0, 250.0] {
+                let (y, x) = (r * t.sin(), r * t.cos());
+                worst = worst.max((fast_atan2(y, x) - y.atan2(x)).abs());
+            }
+        }
+        assert!(worst < 0.005, "worst error {worst}");
     }
 }

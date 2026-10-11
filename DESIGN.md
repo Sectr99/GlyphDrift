@@ -1,229 +1,115 @@
-# Glyphdrift (formerly Glyphdrift and ASCII Live Wallpaper): Design Document
+# Glyphdrift: Design Notes
 
-## 1. Overview
+How the app works and why. For what it does and how to use it, see the [README](README.md).
 
-A lightweight live wallpaper application for Windows that renders ASCII-art animations (matrix rain, plasma, fire, etc.) behind the desktop icons.
+## Goals
 
-**Primary goals**
-- Minimal resource usage: low RAM, near-zero idle CPU, tiny GPU cost
-- Single small executable with no runtime dependencies
-- Easy to add new animations
-- Safe to run permanently as a background process
+- A live wallpaper that can run all day: low CPU, pauses itself, no surprises
+- One small portable exe: no installer, no admin rights, no network access
+- Boring, auditable code: few dependencies (`windows`, `serde`, `toml`, `toml_edit`), minimal `unsafe`, each block with a `// SAFETY:` note
 
-**Non-goals (v1)**
-- Video or GIF wallpapers
-- Cross-platform support
-- A heavy settings GUI
-
-## 2. Technology Decisions
-
-| Area | Decision | Rationale |
-|---|---|---|
-| Language | Rust | Small binary, memory safety for a long-running process, no runtime |
-| Win32 bindings | `windows` crate | Official Microsoft bindings, full API coverage |
-| Rendering (MVP) | Direct2D + DirectWrite | Simple text-grid drawing, low resource use |
-| Rendering (later) | Direct3D 11 glyph atlas (or `wgpu`) | One texture of glyphs, one quad per cell, for high-res effects |
-| Config | TOML (`serde` + `toml`) | Human-readable, easy to hot-reload |
-| Prototyping | Python or Rust + `crossterm` | Iterate on animations in a terminal first |
-
-**Alternatives considered:** C++/Win32 (same footprint, manual memory safety), C#/WPF (faster to build but needs .NET and uses 30-60 MB), Python/pygame (heaviest, awkward to package), Electron/Tauri (WebView overhead).
-
-## 3. Architecture
+## Layout
 
 ```
-+---------------------------------------------------+
-|                    main.rs                        |
-|   startup, message loop, lifecycle                |
-+---------+------------+-------------+--------------+
-          |            |             |
-   +------v-----+ +----v------+ +----v--------+
-   | desktop/   | | render/   | | anim/       |
-   | WorkerW    | | D2D grid  | | animations  |
-   | attach     | | renderer  | | (pure fns)  |
-   +------+-----+ +----+------+ +----+--------+
-          |            |             |
-   +------v-----+ +----v------+ +----v--------+
-   | tray/      | | config/   | | power/      |
-   | tray icon  | | TOML load | | pause logic |
-   +------------+ +-----------+ +-------------+
+src/
+├── main.rs, lib.rs   entry point; module list
+├── app.rs            wallpaper window, frame loop, settings plumbing, lifecycle
+├── desktop/          attaching behind the desktop icons
+├── render/           Direct2D + DirectWrite renderer
+├── anim/             Animation trait and the 23 animations
+├── settings.rs       the settings window (native Win32 controls)
+├── tray/             notification-area icon and menu
+├── config/           TOML config: load, validate, save, migrate
+├── theme.rs          color themes and the readability veil
+├── power/            fullscreen and battery-saver detection
+├── autostart.rs      Start with Windows (per-user Run key)
+├── log.rs            %APPDATA%\Glyphdrift\glyphdrift.log
+├── grid.rs, shape.rs what animations draw into
+└── icon.rs           the icon shape, shared with build.rs
+build.rs              embeds the manifest, icon and version info (no rc.exe)
+site/                 glyphdrift.com, deployed by Cloudflare Pages
 ```
 
-### Modules
+The core (`anim`, `grid`, `config`, `theme`, `icon`, `shape`) is portable and unit-tested on any platform; Windows host code is `cfg`-gated.
 
-- **desktop**: finds `Progman`, sends `0x052C`, locates the `WorkerW` window, creates a borderless window and calls `SetParent`. Handles multi-monitor geometry.
-- **render**: owns the Direct2D/DirectWrite resources. Takes a `Grid` (cells of char + color/brightness) and draws it each frame.
-- **anim**: the animation trait and built-in animations.
-- **config**: loads and validates settings; watches the file for changes.
-- **tray**: notification-area icon with pause/resume, animation picker, and quit.
-- **power**: decides when to pause rendering (fullscreen app, battery saver, session locked).
+## Desktop embedding
 
-## 4. Desktop Embedding (WorkerW Technique)
+`desktop` asks Progman (undocumented message `0x052C`) to create a WorkerW behind the icons, then picks a parent:
 
-1. `FindWindow("Progman")`
-2. `SendMessageTimeout(progman, 0x052C, 0xD, 0x1, ...)` so Explorer creates a `WorkerW` behind the icons
-3. `EnumWindows` to find the `WorkerW` that follows the window containing `SHELLDLL_DefView`
-4. Create a borderless, non-activating window sized to the virtual screen (or per-monitor)
-5. `SetParent(my_hwnd, workerw)`
-6. Handle `WM_DISPLAYCHANGE`, `WM_DPICHANGED`, and Explorer restarts (the `TaskbarCreated` message) by re-attaching
+- **Windows 11 24H2+:** Progman hosts the icons and has `WS_EX_NOREDIRECTIONBITMAP`, so only layered children render. The wallpaper is a layered child of Progman, kept directly below the icon view. This needs the manifest's Windows 10 `supportedOS` entry.
+- **Windows 10 and earlier 11:** the WorkerW that follows the one hosting the icons.
 
-**Risk:** the `0x052C` message is undocumented and has changed behavior between Windows versions (notably Windows 11 24H2). Isolate it in the `desktop` module and test across versions.
+The window spans the virtual screen. Explorer restarts are detected (parent gone) and re-attached; the tray icon is re-added on `TaskbarCreated`.
 
-## 5. Animation API
+## Frame loop
 
-Animations are small, pure, and testable.
+- A high-resolution waitable timer (Windows 10 1803+) drives frames through `MsgWaitForMultipleObjectsEx`; plain `WM_TIMER` would round 33 ms up to the 15.6 ms system tick.
+- Modal loops (scrollbar drags, window moves, the tray menu) bypass our message pump, so a fallback `WM_TIMER` at the frame rate draws frames only while the pump is stalled.
+- Once a second: config hot reload (file mtime) and pause checks. While paused, the timer drops to 1 Hz and only the clock is kept current.
+
+## Animations
 
 ```rust
-pub struct Cell {
-    pub ch: char,
-    pub brightness: u8,      // 0-255
-    pub color: Option<Rgb>,  // None = use theme color
-}
-
 pub trait Animation {
     fn name(&self) -> &'static str;
-    fn init(&mut self, cols: usize, rows: usize, seed: u64);
-    fn resize(&mut self, cols: usize, rows: usize);
-    fn update(&mut self, dt: f32);           // advance state
-    fn render(&self, grid: &mut Grid);       // write cells
+    fn warm(&self) -> bool { false }          // use the theme's warm gradient
+    fn fps(&self) -> u32 { 24 }               // the Auto frame rate
+    fn init(&mut self, size: Size, seed: u64);
+    fn update(&mut self, dt: f32);
+    fn render(&self, grid: &mut Grid) {..}    // character cells
+    fn draw(&self, out: &mut Vec<Shape>) {}   // vector shapes on top
+    fn set_clock(&mut self, _: Option<&[String; 2]>) {}
 }
 ```
 
-Stateless effects (plasma, waves) can be expressed as `(x, y, t) -> Cell`.
+- **Scale:** `Size::focus` is the primary monitor within the window. `focus.unit()` (its smaller side times Overall scale) sizes everything; `object_unit()` adds Object scale for centered objects. Full-bleed animations fill the window, centered ones center on the focus, so multiple monitors neither split an object nor shrink features.
+- **Determinism:** frames depend only on the seed and elapsed time, which keeps tests exact.
+- **Groups:** ASCII (grid only), Graphics, Loops (line art, frames are pure functions of `t`), Fluid and Contour (marching squares over noise fields; some add ASCII shading under the lines).
 
-### Planned animations
-| Animation | Type | Notes |
-|---|---|---|
-| Matrix rain | Stateful | Falling columns with fading trails |
-| Plasma | Stateless | Sine-sum field mapped to a character ramp |
-| Fire | Stateful | Cellular heat propagation |
-| Starfield | Stateful | Parallax points mapped to `. * +` |
-| Waves | Stateless | Scrolling sine field |
-| Clock | Stateful | Big-digit ASCII time overlay (optional) |
+## Rendering
 
-Character ramp for brightness mapping: `" .:-=+*#%@"` (configurable).
+- A Direct2D DC render target draws into the `WM_PAINT` DC, which works for the layered child.
+- Each brightness level's glyphs go out in one `DrawGlyphRun`, so the grid costs at most 16 draw calls.
+- Shapes (lines, circles, polygons, text) follow; runs of identical consecutive lines become one path.
+- A theme is a 16-step gradient from the background through three stops. The readability veil is baked into that palette, so it costs nothing.
 
-## 6. Rendering
+**Performance findings** (from the October 2026 pass):
 
-**MVP (Direct2D + DirectWrite)**
-- Monospace font (Consolas or user-configured), fixed cell size derived from font metrics
-- Grid dimensions = screen size / cell size
-- Draw only changed rows when possible; otherwise full redraw per frame
-- Cap at 15-30 FPS (configurable)
+- The CPU cost of line-heavy animations is Direct2D tessellating segments, about 0.5 µs each, whether drawn singly or batched. What helps is fewer segments and fewer frames: contour grids and dot spacings have pixel floors (`MIN_CELL`), so small scales don't multiply the work, and Contour and Fluid default to 20 fps.
+- Hardware mode made no difference; the target already uses the GPU.
+- `cargo test --release frame_cost -- --ignored --nocapture` times every animation at 3440×1440; `GLYPHDRIFT_SCALE=0.5` tests small scales.
 
-**Phase 2 (GPU glyph atlas)**
-- Pre-render the glyph set into a texture
-- One instanced quad per cell, with the shader picking the glyph and tint
-- Enables full-resolution effects at negligible GPU cost
+At the default scale, the ASCII and loop animations use under 1% CPU on an 8-thread machine, contour and fluid ones 1–3%, and Dune ripples about 4.5%.
 
-## 7. Performance and Power
+## Settings, tray and messages
 
-- Fixed-timestep loop using a waitable timer, never a busy loop
-- Pause rendering when:
-  - A fullscreen app or game is foreground (`SHQueryUserNotificationState`)
-  - The session is locked or the display is off
-  - Battery saver is active (optional setting)
-  - The desktop is fully covered (optional occlusion check)
-- Drop to 1-2 FPS (or stop) while paused and resume instantly on change
+The settings window and tray talk to the wallpaper window with `WM_APP` messages, so all state lives in `App`:
 
-**Targets**
-| Metric | Target |
+| Message | Purpose |
 |---|---|
-| Working set | < 50 MB (measured ~44 MB; nearly all GPU driver. GDI was ~10 MB but ~10x the CPU) |
-| CPU at 30 FPS (1080p) | < 2% on a modern CPU |
-| CPU when paused | ~0% |
-| Binary size | < 2 MB (release, stripped) |
+| `+2` | toggle pause |
+| `+3`, `+4` | set animation, theme (WPARAM = index) |
+| `+5` | get animation and theme indices |
+| `+9`, `+10` | set / get a tweak (speed, fps, readability, scales, clock); value × 1000 |
+| `+11` | to the tray window: open settings (from a second launch) |
+| `+12` | to the settings window: refresh after a tray change |
 
-## 8. Configuration
+A named mutex keeps one instance; a second launch opens the first one's settings.
 
-`config.toml` in `%APPDATA%\Glyphdrift\`:
+## Configuration
 
-```toml
-[general]
-fps = 24
-animation = "matrix"
-pause_on_fullscreen = true
-pause_on_battery_saver = true
+- `%APPDATA%\Glyphdrift\config.toml`, edited with `toml_edit` so hand-written comments survive.
+- Invalid values are clamped or defaulted with a logged warning, never a failed start.
+- The file is created on first launch, which also marks the first-run notification as shown.
+- Startup migrates the settings folder and Run entry from the earlier names (WallMotion, ascii-wallpaper).
 
-[font]
-family = "Consolas"
-size = 16
+## Security
 
-[theme]
-foreground = "#00ff66"
-background = "#000000"
-ramp = " .:-=+*#%@"
+- No network access, telemetry or accounts.
+- Runs as the user; the only registry write is the optional Run entry.
+- The exe isn't code-signed yet, so SmartScreen warns on first run; releases list SHA-256 checksums.
 
-[monitors]
-mode = "all"   # "all" | "primary" | per-monitor overrides
+## Testing
 
-[animation.matrix]
-density = 0.6
-speed = 1.0
-```
-
-Hot-reload on file change.
-
-## 9. Security Considerations
-
-- No network access and no telemetry
-- Config parsed with strict schema validation; unknown keys warn, invalid values fall back to defaults
-- No `unsafe` outside the thin Win32 interop layer; each `unsafe` block gets a comment explaining its invariants
-- Run at standard user privilege (no admin required)
-- Dependency hygiene: `cargo audit` and `cargo deny` in CI, minimal dependency tree, pinned versions
-- Any future user-script support (e.g. Lua/Rhai) must be sandboxed with execution time and memory limits, and treated as untrusted input
-- Release binaries signed if distributed
-
-## 10. Project Structure
-
-```
-ascii-wallpaper/
-├── Cargo.toml
-├── DESIGN.md
-├── config.example.toml
-├── src/
-│   ├── main.rs
-│   ├── desktop/        # WorkerW attach, monitor geometry
-│   ├── render/         # Direct2D/DirectWrite grid renderer
-│   ├── anim/           # Animation trait + built-ins
-│   │   ├── mod.rs
-│   │   ├── matrix.rs
-│   │   ├── plasma.rs
-│   │   └── fire.rs
-│   ├── config/
-│   ├── tray/
-│   └── power/
-├── tests/
-└── tools/
-    └── proto/          # terminal prototypes for animations
-```
-
-## 11. Milestones
-
-1. **M0, Prototype:** terminal-based animations (matrix, plasma, fire) to validate the `Animation` API
-2. **M1, Embed:** Rust app attaches a window to `WorkerW` and fills it with a solid color
-3. **M2, Render:** Direct2D text grid with matrix rain running at a fixed FPS
-4. **M3, Lifecycle:** tray icon, TOML config, multi-monitor, DPI, Explorer-restart recovery
-5. **M4, Power:** fullscreen/lock/battery pausing and perf tuning against targets
-6. **M5, Polish:** more animations, themes, installer or portable zip, optional autostart
-7. **M6, Stretch:** GPU glyph atlas renderer, audio-reactive mode, sandboxed user scripts
-
-## 12. Testing Strategy
-
-- **Unit tests:** animation logic with fixed seeds, grid math, config parsing
-- **Snapshot tests:** render an animation frame to a `Grid` and compare against a stored text snapshot
-- **Manual matrix:** Windows 10 and 11, single and multi-monitor, mixed DPI, Explorer restart, lock/unlock, fullscreen game
-- **Perf checks:** measure working set and CPU with Process Explorer / Task Manager at each milestone
-
-## 13. Open Questions
-
-- Per-monitor independent animations vs. one animation spanning the virtual screen?
-- Autostart via registry `Run` key vs. Task Scheduler?
-- Ship an installer (MSIX/Inno Setup) or a portable zip only?
-- Do we want audio-reactive animations, and is the extra capture dependency worth it?
-- Is Windows 11 24H2 `WorkerW` behavior still compatible with the `0x052C` approach? Verify early in M1.
-
-## 14. References
-
-- Raymond Chen / community writeups on the Progman `0x052C` WorkerW technique
-- Microsoft Docs: Direct2D, DirectWrite, `SHQueryUserNotificationState`
-- `windows` crate documentation (microsoft.github.io/windows-docs-rs)
+- Unit tests: config parsing, contours, noise, slider mapping, grouped lists, determinism and bounds for every animation (including a 4K run that once caught a never-ending loop).
+- Manual: Windows 10 and 11, multi-monitor, DPI, Explorer restart, fullscreen apps, battery saver.

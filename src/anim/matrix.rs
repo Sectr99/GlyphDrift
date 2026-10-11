@@ -63,7 +63,7 @@ impl Animation for Matrix {
     }
 
     fn update(&mut self, dt: f32) {
-        // Glyph flicker advances ~12x/s regardless of frame rate.
+        // Flicker at ~12x/s regardless of frame rate.
         self.tick_accum += dt;
         while self.tick_accum >= 1.0 / 12.0 {
             self.tick_accum -= 1.0 / 12.0;

@@ -1,11 +1,11 @@
-//! Raindrops on still water: rings that spread out and fade.
+//! Raindrops on still water: rings that spread and fade.
 
 use super::{Animation, Rng, Size};
 use crate::grid::{Cell, Grid};
 
-const SPEED: f32 = 5.0; // ring growth, cells per second
-const LIFE: f32 = 3.5; // seconds until a ring has faded out
-const CELLS_PER_DROP: f32 = 3000.0; // spawn rate: one drop per second per this many cells
+const SPEED: f32 = 5.0; // cells per second
+const LIFE: f32 = 3.5; // seconds to fade
+const CELLS_PER_DROP: f32 = 3000.0; // one drop per second per this many cells
 
 struct Drop {
     x: f32,
@@ -59,7 +59,7 @@ impl Animation for Ripples {
         self.rng = Rng::new(seed);
         self.drops.clear();
         self.spawn = 0.0;
-        // Start mid-shower: a few rings already at different ages.
+        // Start mid-shower.
         let n = ((cols * rows) as f32 / CELLS_PER_DROP * LIFE).ceil() as usize;
         for _ in 0..n {
             let age = self.rng.range(0.0, LIFE);
@@ -83,9 +83,9 @@ impl Animation for Ripples {
         grid.clear();
         for d in &self.drops {
             let fade = 1.0 - d.age / LIFE;
-            // An outer ring plus a weaker inner one that trails behind it.
+            // An outer ring and a weaker trailing inner one.
             for (r, k) in [(d.age * SPEED, 1.0), (d.age * SPEED * 0.55, 0.5)] {
-                // Cells are about twice as tall as wide, so the ring spans r/2 rows.
+                // Cells are about twice as tall as wide.
                 let (x0, x1) = ((d.x - r - 1.0).max(0.0), d.x + r + 1.0);
                 let (y0, y1) = ((d.y - r / 2.0 - 1.0).max(0.0), d.y + r / 2.0 + 1.0);
                 for y in y0 as usize..=(y1 as usize).min(grid.rows().saturating_sub(1)) {

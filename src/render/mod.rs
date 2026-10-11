@@ -1,9 +1,5 @@
-﻿//! Grid renderer: Direct2D + DirectWrite.
-//!
-//! All cells of one brightness level go out in a single `DrawGlyphRun`, each glyph placed
-//! with a glyph offset, so a frame is at most `LEVELS` draw calls. A DC render target
-//! draws into the WM_PAINT DC, which keeps the public surface (`new`, `cell_size`,
-//! `paint`) independent of the window. The next step up is a GPU glyph atlas.
+//! Renderer: Direct2D and DirectWrite into the WM_PAINT DC. Each brightness level's
+//! glyphs go out in one `DrawGlyphRun`, so the grid costs at most `LEVELS` calls.
 
 use std::mem::ManuallyDrop;
 
@@ -35,26 +31,26 @@ use windows::Win32::Graphics::Gdi::HDC;
 
 const LEVELS: usize = 16;
 const FALLBACK_FONT: &str = "Consolas";
-/// Typeface for `Shape::Text` (Windows 11; DirectWrite falls back to Segoe UI elsewhere).
+/// Typeface for `Shape::Text` (Windows 11; falls back to Segoe UI elsewhere).
 const TEXT_FONT: PCWSTR = w!("Segoe UI Variable Display");
 
 pub struct Renderer {
     factory: ID2D1Factory,
     dwrite: IDWriteFactory,
     face: IDWriteFontFace,
-    /// Text formats for `Shape::Text`, by (size bits, weight).
-    // ponytail: never evicted; sizes only change on resize or scale changes.
+    /// `Shape::Text` formats by (size bits, weight).
+    // ponytail: never evicted; sizes only change on resize.
     formats: Vec<((u32, u16), IDWriteTextFormat)>,
     em: f32,
     baseline: f32,
     cell_w: i32,
     cell_h: i32,
     bg: D2D1_COLOR_F,
-    /// Foreground color pre-scaled for each brightness level.
+    /// Foreground color per brightness level.
     palette: [D2D1_COLOR_F; LEVELS],
-    /// Device-dependent resources; dropped and rebuilt on D2DERR_RECREATE_TARGET.
+    /// Device resources; rebuilt on D2DERR_RECREATE_TARGET.
     target: Option<Target>,
-    /// Per-level glyph batches, reused across frames to avoid allocation.
+    /// Per-level glyph batches, reused across frames.
     batches: [Batch; LEVELS],
 }
 
@@ -63,13 +59,13 @@ struct Target {
     brushes: Vec<ID2D1SolidColorBrush>,
 }
 
-/// All glyphs of one brightness level, drawn with a single `DrawGlyphRun`.
+/// One brightness level's glyphs, drawn in one `DrawGlyphRun`.
 #[derive(Default)]
 struct Batch {
     codepoints: Vec<u32>,
     glyphs: Vec<u16>,
     advances: Vec<f32>,
-    /// Absolute cell positions; DirectWrite's ascender offset points up, hence `-y`.
+    /// Absolute positions; DirectWrite's ascender offset points up, hence `-y`.
     offsets: Vec<DWRITE_GLYPH_OFFSET>,
 }
 
@@ -110,7 +106,7 @@ impl Renderer {
         stops: &[Rgb; 3],
         glass: f32,
     ) -> Result<Self> {
-        // SAFETY: factory/font calls with valid arguments; every out-pointer is a live local.
+        // SAFETY: valid arguments; every out-pointer is a live local.
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
@@ -118,7 +114,7 @@ impl Renderer {
             let mut fonts = None;
             dwrite.GetSystemFontCollection(&mut fonts, false)?;
             let fonts = fonts.ok_or_else(windows::core::Error::empty)?;
-            // Unknown family: fall back to Consolas, then to whatever font comes first.
+            // Unknown family: Consolas, then the first font.
             let mut index = 0;
             for name in [family, FALLBACK_FONT] {
                 let (mut i, mut exists) = (0u32, BOOL(0));
@@ -138,8 +134,7 @@ impl Renderer {
                 )?
                 .CreateFontFace()?;
 
-            // Same sizing as the GDI renderer: em height = pixel_height, cell height =
-            // ascent + descent, cell width = advance of 'M'.
+            // em = pixel_height, cell = ascent + descent by the advance of 'M'.
             let em = pixel_height as f32;
             let mut m = DWRITE_FONT_METRICS::default();
             face.GetMetrics(&mut m);
@@ -168,8 +163,7 @@ impl Renderer {
         }
     }
 
-    /// Background plus three gradient stops (dim to bright), e.g. from `theme::THEMES`,
-    /// seen through a frosted veil of opacity `glass` (0 = none).
+    /// Background and three stops (dim to bright) under a veil of opacity `glass`.
     pub fn set_colors(&mut self, bg: Rgb, stops: &[Rgb; 3], glass: f32) {
         self.bg = color(theme::frost(bg, bg, glass));
         for (slot, c) in self
@@ -179,21 +173,21 @@ impl Renderer {
         {
             *slot = color(theme::frost(c, bg, glass));
         }
-        self.target = None; // brushes are rebuilt with the new palette
+        self.target = None; // rebuild brushes
     }
 
     pub fn cell_size(&self) -> (i32, i32) {
         (self.cell_w, self.cell_h)
     }
 
-    /// Draw `grid`, then `shapes` on top, into `hdc` (a `width` x `height` client area).
+    /// Draw `grid` then `shapes` into `hdc`.
     pub fn paint(&mut self, hdc: HDC, width: i32, height: i32, grid: &Grid, shapes: &[Shape]) {
         if width <= 0 || height <= 0 {
             return;
         }
         if let Err(e) = self.try_paint(hdc, width, height, grid, shapes) {
             if e.code() == D2DERR_RECREATE_TARGET {
-                self.target = None; // rebuilt on the next frame
+                self.target = None; // rebuilt next frame
             } else {
                 log!("render: {e}");
             }
@@ -229,7 +223,7 @@ impl Renderer {
             if let Shape::Text { size, weight, .. } = *s {
                 let key = (size.to_bits(), weight);
                 if !self.formats.iter().any(|f| f.0 == key) {
-                    // SAFETY: COM calls on a live factory with valid constant arguments.
+                    // SAFETY: COM calls on a live factory.
                     let format = unsafe {
                         let f = self.dwrite.CreateTextFormat(
                             TEXT_FONT,
@@ -249,8 +243,7 @@ impl Renderer {
             }
         }
 
-        // SAFETY: COM calls on live interfaces. Every batch has equally long codepoints,
-        // glyphs, advances and offsets, and those buffers outlive the DrawGlyphRun calls.
+        // SAFETY: live interfaces; each batch's buffers are equally long and outlive the calls.
         unsafe {
             for b in &mut self.batches {
                 let n = b.codepoints.len();
@@ -297,7 +290,7 @@ impl Renderer {
                     bidiLevel: 0,
                 };
                 t.rt.DrawGlyphRun(origin, &run, brush, DWRITE_MEASURING_MODE_NATURAL);
-                // Release the reference taken by `clone` above.
+                // Release the reference `clone` took.
                 drop(ManuallyDrop::into_inner(run.fontFace));
             }
             let pt = |p: (f32, f32)| D2D_POINT_2F { x: p.0, y: p.1 };
@@ -307,8 +300,7 @@ impl Renderer {
                 i += 1;
                 match *s {
                     Shape::Polygon { ref points, level } if level > 0 && points.len() >= 3 => {
-                        // ponytail: one path geometry per polygon per frame; cache if a
-                        // loop ever needs hundreds of fills.
+                        // ponytail: a path per polygon per frame; cache if fills multiply.
                         let geom = self.factory.CreatePathGeometry()?;
                         let sink = geom.Open()?;
                         sink.BeginFigure(pt(points[0]), D2D1_FIGURE_BEGIN_FILLED);
@@ -319,9 +311,7 @@ impl Renderer {
                         t.rt.FillGeometry(&geom, &t.brushes[level_index(level)], None);
                     }
                     Shape::Line { a, b, width, level } if level > 0 => {
-                        // Consecutive lines that look the same go out as one path: one draw
-                        // call instead of thousands for the contour animations. Only
-                        // consecutive ones, so the drawing order (occlusion) is unchanged.
+                        // Consecutive identical lines: one path, order kept.
                         let color = level_index(level);
                         let start = i - 1;
                         while let Some(Shape::Line {
@@ -345,7 +335,7 @@ impl Renderer {
                             let Shape::Line { a, b, .. } = *line else {
                                 continue;
                             };
-                            // Segments that continue the previous one extend its figure.
+                            // Continuing segments extend the figure.
                             if end != Some(a) {
                                 if end.is_some() {
                                     sink.EndFigure(D2D1_FIGURE_END_OPEN);
@@ -382,7 +372,7 @@ impl Renderer {
                         let key = (size.to_bits(), weight);
                         if let Some((_, format)) = self.formats.iter().find(|f| f.0 == key) {
                             let text: Vec<u16> = text.encode_utf16().collect();
-                            // Centered in a box far wider than any line of text.
+                            // Centered in a box wider than any line.
                             let rect = D2D_RECT_F {
                                 left: c.0 - size * 40.0,
                                 top: c.1 - size,
@@ -413,14 +403,13 @@ impl Renderer {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 alphaMode: D2D1_ALPHA_MODE_IGNORE,
             },
-            // 96 DPI: one DIP per pixel. The process is per-monitor DPI aware and the
-            // grid is laid out in physical pixels.
+            // One DIP per pixel: the grid is laid out in physical pixels.
             dpiX: 96.0,
             dpiY: 96.0,
             usage: D2D1_RENDER_TARGET_USAGE_NONE,
             minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
         };
-        // SAFETY: `props` and each palette color are valid for the duration of the calls.
+        // SAFETY: `props` and the palette outlive the calls.
         unsafe {
             let rt = self.factory.CreateDCRenderTarget(&props)?;
             let brushes = self

@@ -5,18 +5,18 @@ use windows::Win32::UI::Shell::{
     SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 
-/// True when a fullscreen app, game, or presentation owns the screen.
+/// True when a fullscreen app owns the screen.
 pub fn fullscreen_app_active() -> bool {
-    // SAFETY: no preconditions; failure is treated as "not fullscreen".
+    // SAFETY: no preconditions; failure reads as not fullscreen.
     match unsafe { SHQueryUserNotificationState() } {
         Ok(s) => s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE,
         Err(_) => false,
     }
 }
 
-/// True when Windows battery saver (energy saver) is on.
+/// True when battery saver is on.
 pub fn battery_saver_on() -> bool {
     let mut s = SYSTEM_POWER_STATUS::default();
-    // SAFETY: `s` is a live local the call fills in; failure is treated as "off".
+    // SAFETY: `s` is a live local; failure reads as off.
     unsafe { GetSystemPowerStatus(&mut s) }.is_ok() && s.SystemStatusFlag == 1
 }

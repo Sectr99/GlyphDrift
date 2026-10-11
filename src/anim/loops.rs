@@ -1,15 +1,6 @@
-//! Minimal geometric loops: one line-art object per animation, in a technical-illustration
-//! style.
-//!
-//! Every frame is a pure function of the clock `t`, so loops are seamless and testable.
-//! Design rules shared by all of them:
-//! - line hierarchy: one HERO line per composition, MID lines for structure, HAIR lines for
-//!   detail and construction; solid, dashed and dotted line types for variety;
-//! - value and form: light comes from the upper left; rims are heavy where lit and hairline
-//!   in shadow; depth drives weight and brightness together;
-//! - texture and depth cues: halftone shadows, overlap, back-to-front drawing;
-//! - framing elements (axes, rulers, guide arcs) are quiet, so the object stays the focus;
-//! - eased motion with holds, and asymmetry where the form allows.
+//! Minimal geometric loops: one line-art object each, technical-illustration style.
+//! Frames are pure functions of `t`. Light comes from the upper left; depth drives line
+//! weight and brightness.
 
 use std::f32::consts::{PI, TAU};
 
@@ -30,38 +21,36 @@ struct Clock {
 impl Clock {
     fn init(&mut self, size: Size, seed: u64) {
         (self.w, self.h, self.focus) = (size.width, size.height, size.focus);
-        self.t = (seed % 1000) as f32; // restarts don't all begin at the same pose
+        self.t = (seed % 1000) as f32;
     }
 }
 
-/// Line-weight tiers in px at a 1000 px screen; `Pen` scales them to the real size.
+/// Line weights in px at a 1000 px screen.
 pub(super) const HERO: f32 = 2.4;
 pub(super) const MID: f32 = 1.3;
 pub(super) const HAIR: f32 = 0.55;
 
-/// Light direction on screen (upper left), unit length.
+/// Light direction on screen (upper left).
 pub(super) const LIGHT_2D: (f32, f32) = (-0.6, -0.8);
 
-/// Smoothstep ease, 0..1 -> 0..1 with zero velocity at both ends.
+/// Smoothstep, 0..1.
 pub(super) fn ease(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
 }
 
-/// 0 at `a`, 1 at `b`, eased in between (works for a > b too).
+/// 0 at `a`, 1 at `b`, eased (a > b works too).
 fn ramp(a: f32, b: f32, x: f32) -> f32 {
     ease((x - a) / (b - a))
 }
 
-/// Anchor for single-object loops: a little right of center, clear of the desktop icons on
-/// the left, and slightly high (the optical center). Only for compositions with something
-/// asymmetric to balance the shift (the globe's guide arc and orbit); balanced ones use
-/// `optical_center`, since an unjustified offset reads as a mistake.
+/// Right of center (clear of desktop icons) and slightly high. Only for asymmetric
+/// compositions; balanced ones use `optical_center`.
 fn anchor(f: Rect) -> ((f32, f32), f32) {
     ((f.x + f.w * 0.56, f.y + f.h * 0.47), f.object_unit())
 }
 
-/// Horizontally centered, slightly high so the object doesn't appear to sag.
+/// Centered, slightly high so the object doesn't sag.
 pub(super) fn optical_center(f: Rect) -> ((f32, f32), f32) {
     ((f.x + f.w * 0.5, f.y + f.h * 0.47), f.object_unit())
 }
@@ -72,7 +61,7 @@ fn turn(c: (f32, f32), angle: f32, dx: f32, dy: f32) -> (f32, f32) {
     (c.0 + dx * k - dy * s, c.1 + dx * s + dy * k)
 }
 
-/// Points along an ellipse (radii `rx`, `ry`, rotated by `rot`) from angle `a0` to `a1`.
+/// Points along a rotated ellipse from angle `a0` to `a1`.
 fn arc(c: (f32, f32), rx: f32, ry: f32, rot: f32, a0: f32, a1: f32, n: usize) -> Vec<(f32, f32)> {
     (0..=n)
         .map(|i| {
@@ -90,7 +79,7 @@ fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
     ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
 }
 
-/// Resolution-aware drawing: weights and spacings are given at a 1000 px screen.
+/// Draws with weights and spacings given at a 1000 px screen.
 #[derive(Clone, Copy)]
 pub(super) struct Pen(f32);
 
@@ -125,7 +114,7 @@ impl Pen {
         }
     }
 
-    /// Dashed polyline; the dash pattern runs continuously across vertices.
+    /// Dashed polyline, pattern continuous across vertices.
     pub(super) fn dashed(
         self,
         out: &mut Vec<Shape>,
@@ -135,9 +124,8 @@ impl Pen {
         weight: f32,
         level: u8,
     ) {
-        // A dash/gap state machine. Each step consumes at least MIN_STEP of path, so it
-        // always terminates; a `%`-based phase can stall on f32 rounding along long paths
-        // and loop forever (it once ate 25 GB).
+        // State machine, not `%`: each step consumes at least MIN_STEP, so it terminates
+        // (f32 rounding once stalled a `%` version forever).
         const MIN_STEP: f32 = 1e-3;
         let (dash, gap) = (self.px(dash).max(0.5), self.px(gap).max(0.5));
         let (mut on, mut left) = (true, dash);
@@ -199,8 +187,7 @@ impl Pen {
         });
     }
 
-    /// Circle outline whose weight follows the light: HERO where lit, HAIR in shadow.
-    /// `strength` (0..1) scales the lit side, e.g. for a thin crescent.
+    /// Circle outline, HERO where lit and HAIR in shadow; `strength` scales the lit side.
     pub(super) fn rim(
         self,
         out: &mut Vec<Shape>,
@@ -230,7 +217,7 @@ impl Pen {
         }
     }
 
-    /// Soft shadow as halftone texture: staggered dots in an ellipse, shrinking to the rim.
+    /// Halftone shadow: staggered dots in an ellipse, shrinking toward the rim.
     pub(super) fn halftone(self, out: &mut Vec<Shape>, c: (f32, f32), rx: f32, ry: f32, level: u8) {
         let step = self.px(7.0);
         let (nx, ny) = ((rx / step) as i32 + 1, (ry / step) as i32 + 1);
@@ -253,7 +240,7 @@ impl Pen {
     }
 }
 
-/// Shapes tagged with depth, emitted far to near (painter's algorithm).
+/// Shapes sorted by depth, emitted far to near.
 struct Layers {
     pen: Pen,
     items: Vec<(f32, Shape)>,
@@ -271,8 +258,7 @@ impl Layers {
         self.items.push((z, s));
     }
 
-    /// A line whose weight (HAIR..HERO) and brightness follow depth `z` (-1 far ..= 1 near),
-    /// brightness times `k`.
+    /// Line with weight and brightness from depth `z` (-1 far, 1 near), brightness times `k`.
     fn depth_line(&mut self, a: (f32, f32), b: (f32, f32), z: f32, k: f32, far: f32, near: f32) {
         let n = ((z + 1.0) / 2.0).clamp(0.0, 1.0);
         let level = (shade(z, far, near) as f32 * k) as u8;
@@ -325,8 +311,7 @@ loop_animation!(Sunburst, "sunburst");
 loop_animation!(Moon, "moon");
 
 impl Helix {
-    /// A double helix receding to the right, turning about a dashed axis, with dotted base
-    /// pairs and a ruler beneath. Strands run from hairline (far) to hero weight (near).
+    /// Double helix receding right, with dotted base pairs and a ruler beneath.
     fn frame(&self, out: &mut Vec<Shape>) {
         const SAMPLES: usize = 160;
         const RUNGS: usize = 26;
@@ -334,7 +319,7 @@ impl Helix {
         let (c, unit) = center(focus);
         let pen = Pen::new(unit);
         let (half_len, r) = ((focus.w * 0.32).min(unit * 0.62), unit * 0.085);
-        // Perspective shrinks the far (right) end, re-centered so it doesn't pull left.
+        // Perspective shrinks the right end; re-centered.
         let persp = |f: f32| 1.25 / (1.0 + 0.55 * f);
         let shift = (1.25 - 1.25 / 1.55) / 2.0 * half_len;
         let along =
@@ -346,7 +331,7 @@ impl Helix {
         };
         let taper = |f: f32| ramp(0.0, 0.18, f) * ramp(1.0, 0.82, f) * (1.1 - 0.35 * f);
 
-        // Construction: a dashed axis running past both ends, a ruler with a tick per rung.
+        // Dashed axis and ruler.
         let axis: Vec<_> = (0..=48)
             .map(|i| along(-0.08 + 1.16 * i as f32 / 48.0, 0.0))
             .collect();
@@ -376,7 +361,6 @@ impl Helix {
         for k in 0..RUNGS {
             let f = (k as f32 + 0.5) / RUNGS as f32;
             let ((a, za), (b, zb)) = (point(f, 0.0), point(f, PI));
-            // Base pair: a dotted rung.
             for d in 1..6 {
                 let fd = d as f32 / 6.0;
                 let z = za + (zb - za) * fd;
@@ -393,7 +377,7 @@ impl Helix {
             for (p, z) in [(a, za), (b, zb)] {
                 let n = (z + 1.0) / 2.0;
                 layers.push(
-                    z + 0.01, // nodes sit on top of the strand at the same depth
+                    z + 0.01, // nodes over the strand
                     Shape::Circle {
                         c: p,
                         r: pen.px(1.0 + 2.4 * n),
@@ -408,9 +392,7 @@ impl Helix {
 }
 
 impl Globe {
-    /// A wireframe globe: rim-lit limb (the hero line), heavier equator, dotted back grid,
-    /// dashed pole axis, a satellite with a fading trail on a dotted orbit, and a partial
-    /// dashed guide arc with ticks framing it off-center.
+    /// Wireframe globe with a rim-lit limb, a satellite on a dotted orbit and a guide arc.
     fn frame(&self, out: &mut Vec<Shape>) {
         const SEG: usize = 64;
         let Clock { t, focus, .. } = self.0;
@@ -420,9 +402,9 @@ impl Globe {
         let (spin, tilt) = (t * 0.22, 0.38 + 0.08 * (t * 0.3).sin());
         let view = |p: V3| p.rot_y(spin).rot_x(tilt);
         let at = |k: usize| k as f32 / SEG as f32 * TAU;
-        const GUIDE: f32 = 1.55; // guide arc radius, in globe radii: clear of the screen edge
+        const GUIDE: f32 = 1.55; // guide arc radius, in globe radii
 
-        // Frame: a partial guide arc with ticks, opening toward the upper right.
+        // Guide arc with ticks.
         let (g0, g1) = (PI * 0.7, PI * 1.9);
         pen.dashed(
             out,
@@ -444,7 +426,7 @@ impl Globe {
                 44,
             );
         }
-        // Pole axis, dashed, extending past the sphere.
+        // Pole axis.
         let (n_pole, s_pole) = (
             view(V3::new(0.0, -1.35, 0.0)),
             view(V3::new(0.0, 1.35, 0.0)),
@@ -467,7 +449,7 @@ impl Globe {
                 let (a, b) = (p.screen(c, r), q.screen(c, r));
                 if z < 0.0 {
                     if k % 2 == 0 {
-                        // The back of the globe is only suggested: a dotted line.
+                        // The back is dotted.
                         layers.push(
                             z,
                             Shape::Circle {
@@ -512,7 +494,7 @@ impl Globe {
             );
         }
 
-        // Satellite on a dotted orbit, hidden behind the globe, trailing a fading arc.
+        // Satellite and trail, hidden behind the globe.
         let orbit = |a: f32| {
             V3::new(a.cos() * 1.5, 0.0, a.sin() * 1.5)
                 .rot_x(0.45)
@@ -566,21 +548,19 @@ impl Globe {
             );
         }
         layers.flush(out);
-        pen.rim(out, c, r, LIGHT_2D, 1.0); // the hero line
+        pen.rim(out, c, r, LIGHT_2D, 1.0);
     }
 }
 
 impl DotWave {
-    /// A circular field of dots in perspective; damped ripples spread from its center and
-    /// the rim fades out, so it reads as an object rather than a floor.
+    /// Circular dot field in perspective with ripples from the center; the rim fades out.
     fn frame(&self, out: &mut Vec<Shape>) {
-        const RADIUS: f32 = 3.0; // field radius, world units
+        const RADIUS: f32 = 3.0; // world units
         const SPACING: f32 = 0.22;
-        const DOT: f32 = 0.025; // dot radius, world units: shrinks with distance like spacing
+        const DOT: f32 = 0.025; // dot radius, world units
         let Clock { t, focus, .. } = self.0;
         let (c, unit) = center(focus);
-        // Camera high and back enough to see the whole disc; then center its near-to-far
-        // extent on screen.
+        // Camera framing the whole disc, centered vertically.
         let (focal, cam_h, dist) = (unit * 0.6, 3.0, 6.0);
         let y0 = (cam_h / (dist - RADIUS) + cam_h / (dist + RADIUS)) / 2.0 * focal;
         let n = (RADIUS / SPACING) as i32;
@@ -593,14 +573,14 @@ impl DotWave {
                 }
                 let crest = (d * 3.2 - t * 1.6).sin() * (-d * 0.35).exp();
                 let y = 0.32 * crest;
-                let depth = dist + z; // z > 0 is farther away
+                let depth = dist + z;
                 let p = (
                     c.0 + x / depth * focal,
                     c.1 + (cam_h - y) / depth * focal - y0,
                 );
                 let near = (RADIUS - z) / (2.0 * RADIUS);
                 let rim = ramp(RADIUS, RADIUS * 0.65, d);
-                let lift = (crest + 1.0) / 2.0; // crests brighter
+                let lift = (crest + 1.0) / 2.0;
                 out.push(Shape::Circle {
                     c: p,
                     r: (DOT * (0.75 + 0.5 * lift) / depth * focal).max(0.7),
@@ -613,14 +593,12 @@ impl DotWave {
 }
 
 impl Cubes {
-    /// A 2x2x2 block of solid, lit cubes making eased quarter-turns about alternating axes
-    /// in a staggered cascade, parting mid-turn and settling (follow-through), over a
-    /// halftone shadow. The block looks the same after every quarter-turn: seamless loop.
+    /// 2x2x2 block of lit cubes making staggered quarter-turns about alternating axes.
     fn frame(&self, out: &mut Vec<Shape>) {
         const PERIOD: f32 = 4.0; // seconds per quarter-turn, including the hold
-        const MOVE: f32 = 0.55; // fraction of the period one cube spends turning
-        const LAG: f32 = 0.07; // per step from the leading corner, as a fraction of PERIOD
-                               // Faces as corner indices (bit 0 = x, 1 = y, 2 = z) in winding order, with normals.
+        const MOVE: f32 = 0.55; // fraction of the period spent turning
+        const LAG: f32 = 0.07; // stagger per cube, fraction of the period
+                               // Faces: corner indices (bit 0 = x, 1 = y, 2 = z) and normals.
         const FACES: [([usize; 4], (f32, f32, f32)); 6] = [
             ([0, 2, 6, 4], (-1.0, 0.0, 0.0)),
             ([1, 3, 7, 5], (1.0, 0.0, 0.0)),
@@ -643,8 +621,7 @@ impl Cubes {
         for cx in [-0.5f32, 0.5] {
             for cy in [-0.5f32, 0.5] {
                 for cz in [-0.5f32, 0.5] {
-                    // Cascade: cubes farther from the leading corner start later. All finish
-                    // within the period (MOVE + 3 * LAG < 1), so the loop stays seamless.
+                    // MOVE + 3 * LAG < 1, so every cube finishes within the period.
                     let lag = [cx, cy, cz].iter().filter(|&&v| v > 0.0).count() as f32;
                     let progress = ((phase - lag * LAG) / MOVE).clamp(0.0, 1.0);
                     let angle = ease(progress) * PI / 2.0;
@@ -702,9 +679,7 @@ impl Cubes {
 }
 
 impl Sunburst {
-    /// A radial waveform: many hairline rays around an empty center, like a ring of sound.
-    /// Mostly a circle with a gentle drifting undulation plus fine per-ray detail. Quality
-    /// from precision and repetition, not ornament; weight and brightness rise with length.
+    /// Radial waveform: hairline rays around an empty center.
     fn frame(&self, out: &mut Vec<Shape>) {
         const RAYS: usize = 240;
         let Clock { t, focus, .. } = self.0;
@@ -714,8 +689,7 @@ impl Sunburst {
         let spin = t * 0.04;
         for k in 0..RAYS {
             let a = k as f32 / RAYS as f32 * TAU;
-            // Gentle low lobes, finer harmonics at unrelated speeds, and a little per-ray
-            // grain that shimmers slowly: organic, never jittery.
+            // Low lobes, finer harmonics and per-ray grain at unrelated speeds.
             let grain = (hash3(k as u32, 3, 0) & 0xFFFF) as f32 / 65536.0;
             let wave = 0.3 * (2.0 * a + t * 0.35).sin()
                 + 0.25 * (5.0 * a - t * 0.6).sin()
@@ -742,16 +716,13 @@ impl Sunburst {
 }
 
 impl Moon {
-    /// The moon as a halftone print: a dot grid where each dot's area is its brightness,
-    /// lit by a sun that circles round, so crescent, gibbous and the soft terminator all
-    /// come from the lighting. Dark maria vary the surface; the night side shows only as
-    /// faint earthshine dots. A few tiny stars twinkle slowly.
+    /// Halftone moon lit by a circling sun, so phases come from the lighting.
     fn frame(&self, out: &mut Vec<Shape>) {
         const CYCLE: f32 = 36.0; // seconds, new moon to new moon
         const TILT: f32 = 0.35;
         const STARS: u32 = 14;
         const ACROSS: f32 = 46.0; // halftone cells across the disc
-                                  // Maria: (x, y, radius) in moon radii; darker regions of the surface.
+                                  // Maria: (x, y, radius) in moon radii.
         const MARIA: [(f32, f32, f32); 5] = [
             (-0.3, -0.35, 0.32),
             (0.2, -0.1, 0.26),
@@ -768,7 +739,7 @@ impl Moon {
             let hh = hash3(i, 7, 0);
             let bits = |shift: u32, n: u64| ((hh >> shift) & n) as f32 / n as f32;
             let (a, d) = (bits(0, 0xFFFF) * TAU, r * (1.6 + 2.4 * bits(16, 0xFFFF)));
-            let p = (c.0 + a.cos() * d * 1.5, c.1 + a.sin() * d * 0.8); // wider than tall
+            let p = (c.0 + a.cos() * d * 1.5, c.1 + a.sin() * d * 0.8);
             let twinkle =
                 0.5 + 0.5 * (t * (0.3 + 0.6 * bits(32, 0xFF)) + 6.0 * bits(40, 0xFF)).sin();
             pen.dot(
@@ -779,19 +750,15 @@ impl Moon {
             );
         }
 
-        // Sun direction: behind the moon at new (phase 0), in front at full (PI); eased so
-        // the cycle lingers at both.
+        // Sun behind at new moon (0), in front at full (PI); eased to linger at both.
         let halves = (t / CYCLE).fract() * 2.0;
         let phase = (halves.floor() + ease(halves.fract())) * PI;
         let sun = V3::new(phase.sin(), 0.0, -phase.cos());
-        // Libration: the real moon's slow nod, so the surface visibly slides over the limb.
+        // Libration: a slow nod.
         let (lib_x, lib_y) = (0.1 * (t * 0.21).sin(), 0.07 * (t * 0.17 + 1.0).sin());
-        // The halftone screen lives on the sphere, not the screen: a hex grid in angular
-        // distance from the disc center (azimuthal equidistant), wrapped onto the surface.
-        // Projected, its spacing compresses toward the limb, and dots shrink as the surface
-        // turns away: the eye reads curvature. Rows reach a little past the limb so
-        // libration never exposes an edge.
-        let step = PI / ACROSS; // angular spacing
+        // Hex grid on the sphere (azimuthal equidistant), so spacing compresses toward the
+        // limb; it reaches past the limb so libration never shows an edge.
+        let step = PI / ACROSS;
         let reach = PI / 2.0 + 0.15;
         let (nx, ny) = (
             (reach / step) as i32 + 1,
@@ -806,7 +773,7 @@ impl Moon {
                     continue;
                 }
                 let phi = gy.atan2(gx);
-                // Moon-fixed surface point (maria are fixed to it), then as seen.
+                // Moon-fixed point, then as seen.
                 let fixed = V3::new(
                     theta.sin() * phi.cos(),
                     theta.sin() * phi.sin(),
@@ -823,12 +790,11 @@ impl Moon {
                         (-((fixed.x - mx).powi(2) + (fixed.y - my).powi(2)) / (mr * mr)).exp()
                     })
                     .sum();
-                let darken = 0.55 + 0.45 * seen.z; // limb darkening
+                let darken = 0.55 + 0.45 * seen.z;
                 let tone = lum * (1.0 - 0.4 * mare.min(1.0)) * darken;
                 let foreshorten = seen.z.powf(0.4);
                 let p = turn(c, TILT, seen.x * r, seen.y * r);
                 if tone > 0.02 {
-                    // Dot area proportional to tone.
                     out.push(Shape::Circle {
                         c: p,
                         r: r * step * 0.5 * tone.sqrt() * foreshorten,
@@ -840,7 +806,6 @@ impl Moon {
                 }
             }
         }
-        // A fine rim that catches the light on the lit side; quieter near new moon.
         let lit = (1.0 - phase.cos()) / 2.0;
         let toward_sun = turn((0.0, 0.0), TILT, phase.sin().signum(), 0.0);
         pen.rim(out, c, r, toward_sun, 0.15 + 0.45 * lit);
@@ -853,7 +818,7 @@ mod tests {
 
     #[test]
     fn dashed_terminates_and_is_bounded_on_long_paths() {
-        // Far from the origin and thousands of px long: where f32 phase math used to stall.
+        // Long and far from the origin: where f32 phase math used to stall.
         let pts = arc((12_000.0, 9_000.0), 5_000.0, 5_000.0, 0.0, 0.0, TAU, 2_000);
         let mut out = Vec::new();
         Pen::new(2160.0).dashed(&mut out, &pts, 6.0, 5.0, HAIR, 40);

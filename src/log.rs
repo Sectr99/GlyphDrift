@@ -1,20 +1,18 @@
-//! Append-only log at `%APPDATA%\Glyphdrift\glyphdrift.log`. Release builds have no
-//! console, so warnings and errors land here (and on stderr, for debug builds).
+//! Append-only log at `%APPDATA%\Glyphdrift\glyphdrift.log` (release builds have no console).
 
 use std::io::Write;
 use std::path::PathBuf;
 
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
-/// Past this size at startup the log moves to `glyphdrift.log.old` and starts fresh.
+/// Past this size at startup, the log moves to `glyphdrift.log.old`.
 const MAX_BYTES: u64 = 256 * 1024;
 
 fn path() -> Option<PathBuf> {
     Some(crate::config::default_path()?.with_file_name("glyphdrift.log"))
 }
 
-/// Start a session: rotate an oversized log and record panics, which abort in release
-/// builds, before the process ends.
+/// Rotate an oversized log and record panics (which abort in release builds).
 pub fn init() {
     if let Some(p) = path() {
         if std::fs::metadata(&p).is_ok_and(|m| m.len() > MAX_BYTES) {

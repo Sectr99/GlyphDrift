@@ -3,7 +3,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
     pub ch: char,
-    /// 0 = invisible, 255 = full foreground brightness.
+    /// 0 = invisible, 255 = full brightness.
     pub brightness: u8,
 }
 
@@ -64,7 +64,7 @@ impl Grid {
         &self.cells[y * self.cols..(y + 1) * self.cols]
     }
 
-    /// Plain-text dump, one line per row. Used by snapshot tests.
+    /// Plain-text dump for snapshot tests.
     pub fn to_text(&self) -> String {
         let mut s = String::with_capacity((self.cols + 1) * self.rows);
         for y in 0..self.rows {

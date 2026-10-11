@@ -53,7 +53,7 @@ impl Animation for Plasma {
         let n = self.ramp.len();
         for y in 0..grid.rows() {
             for x in 0..grid.cols() {
-                // Cells are ~2x taller than wide; stretch y so the pattern isn't squashed.
+                // Cells are ~2x taller than wide; stretch y to match.
                 let v = self.field(x as f32, y as f32 * 2.0).clamp(0.0, 1.0);
                 let idx = ((v * n as f32) as usize).min(n - 1);
                 grid.set(

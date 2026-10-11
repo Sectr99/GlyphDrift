@@ -1,20 +1,18 @@
-// Embed app.manifest, the exe icon and version info with the MSVC linker; no build
-// dependencies needed. The icon is rasterized from src/icon.rs and, with the version info,
-// written straight into a .res file, so no resource compiler (rc.exe) is required either.
+// Embed the manifest, exe icon and version info via the MSVC linker. The icon (from
+// src/icon.rs) and version info are written straight into a .res file: no rc.exe needed.
 
 #[path = "src/icon.rs"]
 #[allow(dead_code)]
 mod icon;
 
-/// Exe icon color: the default theme's green reads on light and dark Explorer backgrounds.
+/// Exe icon color: reads on light and dark backgrounds.
 const EXE_ICON_RGB: (u8, u8, u8) = (0x00, 0xff, 0x66);
 const SIZES: [usize; 6] = [16, 24, 32, 48, 64, 256];
 const RT_ICON: u16 = 3;
 const RT_GROUP_ICON: u16 = 14;
 const RT_VERSION: u16 = 16;
 
-/// Shown by Windows as the app's name (notifications, Task Manager, Startup apps) and
-/// publisher; the version numbers come from Cargo.toml.
+/// App name and publisher as Windows shows them; versions come from Cargo.toml.
 const PRODUCT: &str = "Glyphdrift";
 const PUBLISHER: &str = "Sectr99";
 const COPYRIGHT: &str = "© 2026 Sectr99";
@@ -22,7 +20,7 @@ const COPYRIGHT: &str = "© 2026 Sectr99";
 fn main() {
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=src/icon.rs");
-    println!("cargo:rerun-if-changed=Cargo.toml"); // version
+    println!("cargo:rerun-if-changed=Cargo.toml");
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
         return;
     }
@@ -37,7 +35,7 @@ fn main() {
     println!("cargo:rustc-link-arg-bins={}", res.display());
 }
 
-/// A .res file holding one RT_ICON per size plus the RT_GROUP_ICON (id 1) that lists them.
+/// A .res file: one RT_ICON per size plus the RT_GROUP_ICON (id 1) listing them.
 fn icon_res() -> Vec<u8> {
     let mut out = Vec::new();
     res_entry(&mut out, 0, 0, &[]); // a .res file starts with an empty entry
@@ -59,7 +57,7 @@ fn icon_res() -> Vec<u8> {
     out
 }
 
-/// One resource: 32-byte header with numeric type and name, then data padded to 4 bytes.
+/// One resource: 32-byte header (numeric type and name), data padded to 4 bytes.
 fn res_entry(out: &mut Vec<u8>, ty: u16, id: u16, data: &[u8]) {
     out.extend((data.len() as u32).to_le_bytes());
     out.extend(32u32.to_le_bytes());
@@ -95,7 +93,7 @@ fn dib(n: usize) -> Vec<u8> {
     out
 }
 
-/// VS_VERSIONINFO: fixed version numbers plus the strings Explorer and Task Manager show.
+/// VS_VERSIONINFO: fixed versions plus the strings Windows shows.
 fn version_info() -> Vec<u8> {
     let part = |name: &str| -> u32 {
         std::env::var(format!("CARGO_PKG_VERSION_{name}"))
@@ -142,7 +140,7 @@ fn version_info() -> Vec<u8> {
         version_node(key, 1, &text, (text.len() / 2) as u16, &[])
     })
     .collect();
-    // Language en-US (0x0409), code page Unicode (1200 = 0x04B0).
+    // en-US (0x0409), Unicode (0x04B0).
     let table = version_node("040904B0", 1, &[], 0, &strings);
     let string_info = version_node("StringFileInfo", 1, &[], 0, &[table]);
     let translation = [0x0409u16, 0x04B0]
@@ -160,8 +158,8 @@ fn version_info() -> Vec<u8> {
     )
 }
 
-/// One version-info block: length, value length (bytes, or characters for text), type
-/// (1 = text), NUL-terminated UTF-16 key, then value and children, each 4-byte aligned.
+/// A version-info block: length, value length (bytes, or chars for text), type (1 = text),
+/// UTF-16 key, then value and children, each 4-byte aligned.
 fn version_node(key: &str, ty: u16, value: &[u8], value_len: u16, children: &[Vec<u8>]) -> Vec<u8> {
     let mut out = vec![0u8; 6];
     out.extend(utf16z(key));

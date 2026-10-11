@@ -1,6 +1,4 @@
-//! TOML configuration with defaults and validation.
-//!
-//! Invalid values never abort startup: they are clamped or replaced by defaults.
+//! TOML configuration. Invalid values never abort startup: they're clamped or defaulted.
 
 use serde::Deserialize;
 
@@ -23,13 +21,13 @@ impl Rgb {
 pub struct General {
     pub fps: u32,
     pub animation: String,
-    /// Animation speed multiplier.
+    /// Speed multiplier.
     pub speed: f32,
-    /// Overall scale: ASCII font size, line weights and feature sizes.
+    /// ASCII font size, line weights and feature sizes.
     pub scale: f32,
     /// Extra scale for centered objects.
     pub object_scale: f32,
-    /// Show the time and date (animations with a clock area: Topographic drift).
+    /// Time and date in Topographic drift.
     pub clock: bool,
     pub pause_on_fullscreen: bool,
     pub pause_on_battery_saver: bool,
@@ -48,7 +46,7 @@ pub struct Theme {
     /// One of `theme::THEMES`.
     pub name: String,
     pub ramp: String,
-    /// Frosted veil opacity over the animation, for legible desktop icon labels.
+    /// Veil opacity (Settings: Icon readability).
     pub glass: f32,
 }
 
@@ -95,7 +93,7 @@ impl Default for Theme {
 }
 
 impl Config {
-    /// Parse and validate. Returns the config plus human-readable warnings.
+    /// Parse and validate; returns warnings too.
     pub fn from_toml(text: &str) -> (Config, Vec<String>) {
         let mut warnings = Vec::new();
         let mut cfg: Config = match toml::from_str(text) {
@@ -110,7 +108,7 @@ impl Config {
     }
 
     fn validate(&mut self, w: &mut Vec<String>) {
-        // 0 means auto: each animation's own frame rate.
+        // 0 = auto.
         let fps = if self.general.fps == 0 {
             0
         } else {
@@ -194,7 +192,7 @@ impl Config {
     }
 }
 
-/// Set `[section] key = value` in `text`, keeping everything else (comments included).
+/// Set `[section] key = value` in `text`, keeping everything else.
 pub fn set_value(
     text: &str,
     section: &str,
@@ -211,8 +209,7 @@ pub fn set_value(
     Ok(doc.to_string())
 }
 
-/// Persist one setting to the config file, creating it if needed. A config file that
-/// doesn't parse is left untouched rather than overwritten.
+/// Save one setting, creating the file if needed; an unparseable file is left alone.
 pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Result<(), String> {
     let path = default_path().ok_or("APPDATA not set")?;
     let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -223,16 +220,15 @@ pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Res
     std::fs::write(&path, out).map_err(|e| format!("{e}"))
 }
 
-/// Written as the config file on first run. Having no settings keeps every default; the
-/// file's existence is what marks the first-run hint as shown.
+/// The first-run config: no settings (all defaults). Its existence marks the first-run
+/// hint as shown.
 const NEW_CONFIG: &str = "\
 # Glyphdrift settings. Changes made in Settings or the tray menu are saved here, and edits
 # to this file apply within a second. Every option is listed in config.example.toml:
 # https://github.com/Sectr99/GlyphDrift/blob/main/config.example.toml
 ";
 
-/// Create the config file if there is none. Returns true if it was created, i.e. this is
-/// the first run.
+/// Create the config if missing; true if created (the first run).
 pub fn create_if_missing() -> bool {
     let Some(path) = default_path() else {
         return false;
@@ -256,10 +252,10 @@ pub fn default_path() -> Option<std::path::PathBuf> {
     )
 }
 
-/// The settings folder's names before the Glyphdrift rename, newest first.
+/// Older settings folder names, newest first.
 const LEGACY_DIRS: [&str; 2] = ["WallMotion", "ascii-wallpaper"];
 
-/// One-time move of the settings folder from an older name, if there is no current one.
+/// Move an older settings folder into place, if there is no current one.
 pub fn migrate() {
     let Some(base) = std::env::var_os("APPDATA") else {
         return;
@@ -278,12 +274,12 @@ pub fn migrate() {
     }
 }
 
-/// Modification time of the config file, for hot-reload; None if it doesn't exist.
+/// Config file mtime, for hot reload.
 pub fn modified() -> Option<std::time::SystemTime> {
     std::fs::metadata(default_path()?).ok()?.modified().ok()
 }
 
-/// Load from disk; missing file means defaults, silently.
+/// Load from disk; a missing file means defaults.
 pub fn load() -> (Config, Vec<String>) {
     match default_path().and_then(|p| std::fs::read_to_string(p).ok()) {
         Some(text) => Config::from_toml(&text),

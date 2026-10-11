@@ -3,7 +3,7 @@
 use super::{Animation, Rng, Size};
 use crate::shape::Shape;
 
-const STEP: f32 = 1.0 / 30.0; // fixed simulation step, so trails look the same at any FPS
+const STEP: f32 = 1.0 / 30.0; // fixed step: trails look the same at any fps
 const TRAIL: usize = 14; // points per trail
 const PX_PER_PARTICLE: f32 = 9_000.0;
 
@@ -39,7 +39,7 @@ impl Flow {
         }
     }
 
-    /// Direction of the current at (x, y), in radians: a few slow, smooth waves.
+    /// Current direction at (x, y), radians: a few slow waves.
     fn angle(&self, x: f32, y: f32) -> f32 {
         let t = self.t;
         let (x, y) = (x / self.scale, y / self.scale);
@@ -68,7 +68,7 @@ impl Flow {
             p.trail.copy_within(0..TRAIL - 1, 1);
             p.trail[0] = (x + a.cos() * p.speed * STEP, y + a.sin() * p.speed * STEP);
             let (nx, ny) = p.trail[0];
-            // Respawn rather than wrap, so trails never streak across the screen.
+            // Respawn rather than wrap, so trails never streak across.
             if p.age >= p.life || nx < 0.0 || ny < 0.0 || nx > self.w || ny > self.h {
                 *p = Self::spawn(&mut self.rng, self.w, self.h, self.scale, 0.0);
             }
@@ -94,7 +94,7 @@ impl Animation for Flow {
     fn init(&mut self, size: Size, seed: u64) {
         self.rng = Rng::new(seed);
         (self.w, self.h) = (size.width, size.height);
-        // Tuned on a 1440 px-tall screen: keep that look there, and the same proportions elsewhere.
+        // Tuned at 1440 px tall; same proportions elsewhere.
         self.scale = (size.focus.unit() / 1440.0).max(0.25);
         self.t = (seed % 1000) as f32;
         self.accum = 0.0;
@@ -107,7 +107,7 @@ impl Animation for Flow {
             })
             .collect();
         for _ in 0..TRAIL {
-            self.step(); // grow the trails before the first frame
+            self.step(); // grow trails before the first frame
         }
     }
 
@@ -120,9 +120,8 @@ impl Animation for Flow {
     }
 
     fn draw(&self, out: &mut Vec<Shape>) {
-        // Segments grouped by brightness band (the renderer's 16 palette levels), dim to
-        // bright: trails don't occlude each other, and same-looking consecutive lines are
-        // drawn in one call. Brighter heads also end up on top where trails cross.
+        // Grouped by brightness band, dim to bright, so the renderer batches them; trails
+        // don't occlude each other.
         let mut bands: [Vec<Shape>; 16] = Default::default();
         let width = 1.2 * self.scale.max(0.75);
         for p in &self.particles {

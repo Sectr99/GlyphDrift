@@ -1,4 +1,4 @@
-//! Wind: soft streaks drifting across the screen on gently curving paths.
+//! Soft streaks drifting on gently curving paths.
 
 use super::{Animation, Rng, Size};
 use crate::grid::{Cell, Grid};
@@ -12,7 +12,7 @@ struct Gust {
     len: usize,
     phase: f32,
     amp: f32,
-    /// Peak brightness 0..1; dimmer streaks read as farther away.
+    /// Peak brightness 0..1; dimmer reads as farther.
     depth: f32,
 }
 
@@ -42,7 +42,7 @@ impl Wind {
                 -rng.range(0.0, cols as f32 * 0.5)
             },
             y: rng.range(0.0, rows as f32),
-            speed: 6.0 + 16.0 * depth, // nearer streaks move faster
+            speed: 6.0 + 16.0 * depth, // nearer is faster
             len: (4.0 + 12.0 * depth) as usize,
             phase: rng.range(0.0, std::f32::consts::TAU),
             amp: rng.range(1.0, 4.0),

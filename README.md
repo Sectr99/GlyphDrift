@@ -4,11 +4,11 @@ A live wallpaper for Windows 10/11 and macOS 12+: contour maps, ASCII art and ge
 
 **[glyphdrift.com](https://glyphdrift.com)** · **[Download the latest release](https://github.com/Sectr99/GlyphDrift/releases/latest)**
 
-- **Small:** one portable exe (about 0.9 MB) on Windows and a universal app (about 0.7 MB zipped) on macOS. No installer, no admin rights, and it never connects to the internet.
-- **23 animations:** Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour).
-- **22 themes:** Matrix, Mono, Amber CRT; Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Everforest, Monokai, Ayu Dark, Night Owl, Palenight, GitHub Dark, Oxocarbon, Poimandres; Synthwave '84, Claude.
-- **Pauses itself** while a fullscreen app is open or battery saver is on (Windows), or while the desktop is covered or Low Power Mode is on (macOS).
-- **Low CPU use:** on an 8-thread CPU at 3440×1440, the ASCII and loop animations use under 1% and the contour and fluid ones 1–3% (Dune ripples about 4.5%), with 45–70 MB of memory, most of it the GPU driver. Smaller overall scales draw more detail and cost more.
+- Small: one portable exe (about 0.9 MB) on Windows and a universal app (about 0.7 MB zipped) on macOS. No installer, no admin rights, and it never connects to the internet.
+- 23 animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour).
+- 22 themes: Matrix, Mono, Amber CRT; Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Everforest, Monokai, Ayu Dark, Night Owl, Palenight, GitHub Dark, Oxocarbon, Poimandres; Synthwave '84, Claude.
+- Pauses while a fullscreen app is open or battery saver is on (Windows), or while the desktop is covered or Low Power Mode is on (macOS).
+- Low CPU use: on an 8-thread CPU at 3440×1440, the ASCII and loop animations use under 1% and the contour and fluid ones 1 to 3% (Dune ripples about 4.5%), with 45 to 70 MB of memory, most of it the GPU driver. Smaller overall scales draw more detail and cost more.
 
 ## Use
 
@@ -48,7 +48,7 @@ To uninstall: untick **Open at Login**, **Quit**, then delete the app, `~/Librar
 
 ## Configuration
 
-Settings live in `%APPDATA%\Glyphdrift\config.toml`, created on first launch. You can also edit it by hand; changes apply within a second, no restart needed. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
+Settings live in `%APPDATA%\Glyphdrift\config.toml`, created on first launch. You can also edit it by hand; changes apply within a second without a restart. Invalid values fall back to defaults instead of stopping the app. See [`config.example.toml`](config.example.toml) for every option (fps, font, character ramp, pause behavior).
 
 ## Uninstall
 

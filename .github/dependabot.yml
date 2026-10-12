@@ -11,5 +11,10 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # The windows crate's 0.x releases rename APIs and need porting by hand, so they come
+      # as their own PR instead of holding back everything else.
+      windows:
+        patterns: ["windows*"]
       cargo:
         patterns: ["*"]
+        exclude-patterns: ["windows*"]

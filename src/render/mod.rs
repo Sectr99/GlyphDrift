@@ -7,12 +7,12 @@ use crate::config::Rgb;
 use crate::grid::Grid;
 use crate::shape::Shape;
 use crate::theme;
-use windows::core::{w, Result, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{BOOL, D2DERR_RECREATE_TARGET, RECT};
+use windows::core::{w, Result, BOOL, HSTRING, PCWSTR};
+use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
     D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
-    D2D_POINT_2F, D2D_RECT_F,
+    D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
@@ -29,6 +29,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC;
+use windows_numerics::Vector2;
 
 const LEVELS: usize = 16;
 const FALLBACK_FONT: &str = "Consolas";
@@ -272,9 +273,9 @@ impl Renderer {
             t.rt.BindDC(hdc, &rect)?;
             t.rt.BeginDraw();
             t.rt.Clear(Some(&self.bg));
-            let origin = D2D_POINT_2F {
-                x: 0.0,
-                y: self.baseline,
+            let origin = Vector2 {
+                X: 0.0,
+                Y: self.baseline,
             };
             for (b, brush) in self.batches.iter().zip(&t.brushes) {
                 if b.glyphs.is_empty() {
@@ -294,7 +295,7 @@ impl Renderer {
                 // Release the reference `clone` took.
                 drop(ManuallyDrop::into_inner(run.fontFace));
             }
-            let pt = |p: (f32, f32)| D2D_POINT_2F { x: p.0, y: p.1 };
+            let pt = |p: (f32, f32)| Vector2 { X: p.0, Y: p.1 };
             let mut i = 0;
             while i < shapes.len() {
                 let s = &shapes[i];

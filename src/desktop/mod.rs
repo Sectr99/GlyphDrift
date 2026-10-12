@@ -1,8 +1,8 @@
 //! Desktop embedding behind the icons via Progman/WorkerW. The 0x052C message is
 //! undocumented and Explorer's layout varies by build, so those assumptions live here.
 
-use windows::core::{w, Result};
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::core::{w, Result, BOOL};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowExW, FindWindowW, GetSystemMetrics, SendMessageTimeoutW, SetWindowPos,
@@ -30,7 +30,7 @@ pub fn find_wallpaper_parent() -> Result<HWND> {
 
         // Windows 11 24H2+: Progman hosts the icons and only layered children render, so we
         // become one, kept directly below the icons by `place`.
-        if FindWindowExW(progman, None, w!("SHELLDLL_DefView"), None).is_ok() {
+        if FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), None).is_ok() {
             return Ok(progman);
         }
 
@@ -49,8 +49,8 @@ pub fn find_wallpaper_parent() -> Result<HWND> {
 unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     // SAFETY: lparam points at a local that outlives the synchronous EnumWindows call.
     let out = &mut *(lparam.0 as *mut HWND);
-    if FindWindowExW(hwnd, None, w!("SHELLDLL_DefView"), None).is_ok() {
-        if let Ok(worker) = FindWindowExW(None, hwnd, w!("WorkerW"), None) {
+    if FindWindowExW(Some(hwnd), None, w!("SHELLDLL_DefView"), None).is_ok() {
+        if let Ok(worker) = FindWindowExW(None, Some(hwnd), w!("WorkerW"), None) {
             *out = worker;
             return BOOL(0); // stop
         }
@@ -87,8 +87,8 @@ pub fn place(hwnd: HWND, parent: HWND) {
     let (x, y, w, h) = rect_in_parent(parent);
     // SAFETY: window calls; failures are harmless.
     unsafe {
-        let _ = match FindWindowExW(parent, None, w!("SHELLDLL_DefView"), None) {
-            Ok(icons) => SetWindowPos(hwnd, icons, x, y, w, h, SWP_NOACTIVATE),
+        let _ = match FindWindowExW(Some(parent), None, w!("SHELLDLL_DefView"), None) {
+            Ok(icons) => SetWindowPos(hwnd, Some(icons), x, y, w, h, SWP_NOACTIVATE),
             Err(_) => SetWindowPos(hwnd, None, x, y, w, h, SWP_NOACTIVATE | SWP_NOZORDER),
         };
     }

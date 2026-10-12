@@ -67,9 +67,14 @@ for (const t of THEMES) {
   b.dataset.name = t[0];
   b.setAttribute("aria-pressed", "false");
   b.style.background = t[1];
-  const stops = [t[1], ...t[2]].join(", ");
-  b.innerHTML = `<span></span><span class="bar" style="background: linear-gradient(90deg, ${stops})"></span>`;
-  b.firstChild.textContent = t[0];
+  // Built with the DOM, not innerHTML: the Content-Security-Policy (_headers) blocks inline
+  // style attributes, but allows setting styles from script.
+  const name = document.createElement("span");
+  name.textContent = t[0];
+  const bar = document.createElement("span");
+  bar.className = "bar";
+  bar.style.background = `linear-gradient(90deg, ${[t[1], ...t[2]].join(", ")})`;
+  b.append(name, bar);
   b.addEventListener("click", () => applyTheme(t, true));
   swatches.appendChild(b);
 }

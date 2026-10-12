@@ -10,8 +10,8 @@ members = ["web", "saver"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-toml = "1"
-toml_edit = "0.25" # edits config.toml keeping its comments
+# Parses config.toml (serde) and edits it keeping its comments.
+toml_edit = { version = "0.25", features = ["serde"] }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.58"

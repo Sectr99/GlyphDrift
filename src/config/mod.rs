@@ -109,7 +109,7 @@ impl Config {
     /// Parse and validate; returns warnings too.
     pub fn from_toml(text: &str) -> (Config, Vec<String>) {
         let mut warnings = Vec::new();
-        let mut cfg: Config = match toml::from_str(text) {
+        let mut cfg: Config = match toml_edit::de::from_str(text) {
             Ok(c) => c,
             Err(e) => {
                 warnings.push(format!("config parse error, using defaults: {e}"));

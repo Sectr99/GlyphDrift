@@ -1,8 +1,10 @@
 # Security headers for every page, applied by Cloudflare Pages.
 # The site loads only its own files: scripts, styles, images and glyphdrift.wasm
-# ('wasm-unsafe-eval' lets the live previews compile it). Nothing may frame the site.
+# ('wasm-unsafe-eval' lets the live previews compile it), plus Cloudflare Web Analytics,
+# which Cloudflare injects (the beacon script, and its reports to cloudflareinsights.com).
+# Nothing may frame the site.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self'; img-src 'self'; connect-src 'self' https://cloudflareinsights.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests
   Strict-Transport-Security: max-age=31536000
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY

@@ -5,7 +5,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{w, Error, Result};
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, BOOL, COLORREF, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT,
+    CloseHandle, GetLastError, COLORREF, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT,
     WAIT_OBJECT_0, WPARAM,
 };
 use windows::Win32::Globalization::{
@@ -78,7 +78,7 @@ impl FrameTimer {
         unsafe {
             let _ = SetWaitableTimer(self.handle, &due, ms as i32, None, None, false);
             if !self.window.is_invalid() {
-                SetTimer(self.window, FALLBACK_TIMER_ID, ms, None);
+                SetTimer(Some(self.window), FALLBACK_TIMER_ID, ms, None);
             }
         }
     }
@@ -285,10 +285,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         {
             if let Some(app) = app_of(hwnd) {
                 // Explorer restarted: re-attach.
-                if !IsWindow(app.parent).as_bool() {
+                if !IsWindow(Some(app.parent)).as_bool() {
                     if let Ok(parent) = desktop::find_wallpaper_parent() {
                         app.parent = parent;
-                        let _ = SetParent(hwnd, parent);
+                        let _ = SetParent(hwnd, Some(parent));
                         on_display_change(hwnd, app);
                     }
                 }
@@ -296,7 +296,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let reloaded =
                     app.last_power_check.elapsed().as_secs() >= 1 && app.reload_if_changed();
                 if reloaded {
-                    let _ = InvalidateRect(hwnd, None, BOOL(0));
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 let changed = app.refresh_pause() || reloaded;
                 if changed {
@@ -307,7 +307,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     // Keep the clock current while paused.
                     if app.cfg.general.clock && app.clock != Some(local_clock()) {
                         app.render_frame();
-                        let _ = InvalidateRect(hwnd, None, BOOL(0));
+                        let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 } else {
                     let now = Instant::now();
@@ -315,7 +315,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.last_frame = now;
                     app.anim.update(dt * app.cfg.general.speed);
                     app.render_frame();
-                    let _ = InvalidateRect(hwnd, None, BOOL(0));
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
             }
             LRESULT(0)
@@ -352,7 +352,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.apply_colors();
                 app.timer.set(app.interval_ms()); // frame rate may differ
                 save("general", "animation", name);
-                let _ = InvalidateRect(hwnd, None, BOOL(0));
+                let _ = InvalidateRect(Some(hwnd), None, false);
                 refresh_settings();
             }
             LRESULT(0)
@@ -362,7 +362,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.cfg.theme.name = t.name.into();
                 app.apply_colors();
                 save("theme", "name", t.name);
-                let _ = InvalidateRect(hwnd, None, BOOL(0));
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
             LRESULT(0)
         }
@@ -370,7 +370,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if let Some(app) = app_of(hwnd) {
                 let (id, commit) = (wp.0 & 0xFF, (wp.0 >> 8) & 1 == 1);
                 app.tweak(id, lp.0 as f32 / 1000.0, commit);
-                let _ = InvalidateRect(hwnd, None, BOOL(0));
+                let _ = InvalidateRect(Some(hwnd), None, false);
                 if id == settings::CLOCK {
                     refresh_settings(); // toggled from the tray
                 }
@@ -488,7 +488,7 @@ pub fn run() -> Result<()> {
                 ..Default::default()
             };
             if RegisterClassW(&wc) == 0 {
-                return Err(Error::from_win32());
+                return Err(Error::from_thread());
             }
 
             let (x, y, w, h) = desktop::rect_in_parent(parent);
@@ -502,9 +502,9 @@ pub fn run() -> Result<()> {
                 y,
                 w,
                 h,
-                parent,
+                Some(parent),
                 None,
-                hinst,
+                Some(hinst.into()),
                 Some(app_ptr as *const c_void),
             )?;
             SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
@@ -538,7 +538,7 @@ pub fn run() -> Result<()> {
                 );
                 (*app_ptr).last_pump = Instant::now();
                 if wake == WAIT_OBJECT_0 {
-                    SendMessageW(hwnd, WM_TIMER, WPARAM(TIMER_ID), LPARAM(0));
+                    SendMessageW(hwnd, WM_TIMER, Some(WPARAM(TIMER_ID)), Some(LPARAM(0)));
                 }
                 while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                     if msg.message == WM_QUIT {
@@ -567,7 +567,7 @@ fn refresh_settings() {
     let window = settings::window();
     if !window.is_invalid() {
         // SAFETY: plain message post; a stale handle just fails.
-        let _ = unsafe { PostMessageW(window, settings::WM_REFRESH, WPARAM(0), LPARAM(0)) };
+        let _ = unsafe { PostMessageW(Some(window), settings::WM_REFRESH, WPARAM(0), LPARAM(0)) };
     }
 }
 
@@ -583,7 +583,7 @@ fn first_instance() -> bool {
             let mut pid = 0;
             GetWindowThreadProcessId(tray, Some(&mut pid));
             let _ = AllowSetForegroundWindow(pid); // so it can come to the front
-            let _ = PostMessageW(tray, tray::WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(tray), tray::WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
         }
         false
     }

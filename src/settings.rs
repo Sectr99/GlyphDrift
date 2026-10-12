@@ -3,10 +3,8 @@
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
-use windows::core::{w, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{
-    BOOL, COLORREF, ERROR_SUCCESS, HWND, LPARAM, LRESULT, RECT, WPARAM,
-};
+use windows::core::{w, BOOL, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{COLORREF, ERROR_SUCCESS, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::Graphics::Gdi::{
     CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColor,
@@ -149,7 +147,7 @@ pub fn open(wallpaper: HWND) {
     // SAFETY: window creation on the UI thread; re-registering the class fails harmlessly.
     unsafe {
         let existing = window();
-        if !existing.is_invalid() && IsWindow(existing).as_bool() {
+        if !existing.is_invalid() && IsWindow(Some(existing)).as_bool() {
             let _ = ShowWindow(existing, SW_RESTORE);
             let _ = SetForegroundWindow(existing);
             return;
@@ -171,7 +169,8 @@ pub fn open(wallpaper: HWND) {
             hInstance: hinst.into(),
             lpszClassName: class,
             // MAKEINTRESOURCE(1): the exe icon.
-            hIcon: LoadIconW(hinst, PCWSTR(std::ptr::without_provenance(1))).unwrap_or_default(),
+            hIcon: LoadIconW(Some(hinst.into()), PCWSTR(std::ptr::without_provenance(1)))
+                .unwrap_or_default(),
             hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as isize as *mut _),
             ..Default::default()
         };
@@ -210,7 +209,7 @@ pub fn open(wallpaper: HWND) {
             h,
             None,
             None,
-            hinst,
+            Some(hinst.into()),
             None,
         );
     }
@@ -289,13 +288,18 @@ unsafe fn build(hwnd: HWND) {
             px(y, s),
             px(w, s),
             px(h, s),
-            hwnd,
-            HMENU(id as *mut _),
-            hinst,
+            Some(hwnd),
+            Some(HMENU(id as *mut _)),
+            Some(hinst.into()),
             None,
         )
         .unwrap_or_default();
-        SendMessageW(child, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+        SendMessageW(
+            child,
+            WM_SETFONT,
+            Some(WPARAM(font.0 as usize)),
+            Some(LPARAM(1)),
+        );
         if dark {
             // Windows' own dark control styles.
             match class.to_string().unwrap_or_default().as_str() {
@@ -338,8 +342,8 @@ unsafe fn build(hwnd: HWND) {
         SendMessageW(
             combo,
             CB_ADDSTRING,
-            WPARAM(0),
-            LPARAM(HSTRING::from(text).as_ptr() as isize),
+            Some(WPARAM(0)),
+            Some(LPARAM(HSTRING::from(text).as_ptr() as isize)),
         );
     }
     y += 34;
@@ -368,8 +372,8 @@ unsafe fn build(hwnd: HWND) {
         SendMessageW(
             list,
             LB_ADDSTRING,
-            WPARAM(0),
-            LPARAM(HSTRING::from(text).as_ptr() as isize),
+            Some(WPARAM(0)),
+            Some(LPARAM(HSTRING::from(text).as_ptr() as isize)),
         );
     }
     y += THEME_ROWS * ROW_H + 4 + 14;
@@ -391,8 +395,8 @@ unsafe fn build(hwnd: HWND) {
         SendMessageW(
             slider,
             TBM_SETRANGE,
-            WPARAM(1),
-            LPARAM(((max << 16) | min) as isize),
+            Some(WPARAM(1)),
+            Some(LPARAM(((max << 16) | min) as isize)),
         );
         control(
             w!("STATIC"),
@@ -421,8 +425,8 @@ unsafe fn build(hwnd: HWND) {
         SendMessageW(
             rates,
             CB_ADDSTRING,
-            WPARAM(0),
-            LPARAM(HSTRING::from(label).as_ptr() as isize),
+            Some(WPARAM(0)),
+            Some(LPARAM(HSTRING::from(label).as_ptr() as isize)),
         );
     }
     y += 36;
@@ -472,7 +476,7 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        hwnd,
+        Some(hwnd),
         None,
         None,
         None,
@@ -485,8 +489,8 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
     SendMessageW(
         tip,
         TTM_SETMAXTIPWIDTH,
-        WPARAM(0),
-        LPARAM(px(320, s) as isize),
+        Some(WPARAM(0)),
+        Some(LPARAM(px(320, s) as isize)),
     );
     let mut tools: Vec<(usize, usize)> = Vec::new(); // (control id, setting id)
     for (id, ..) in SLIDERS {
@@ -503,7 +507,7 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
         (ID_CLOCK_LABEL, CLOCK),
     ]);
     for (control, setting) in tools {
-        let Ok(child) = GetDlgItem(hwnd, control as i32) else {
+        let Ok(child) = GetDlgItem(Some(hwnd), control as i32) else {
             continue;
         };
         // The tooltip copies the text.
@@ -519,30 +523,31 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
         SendMessageW(
             tip,
             TTM_ADDTOOLW,
-            WPARAM(0),
-            LPARAM(&info as *const TTTOOLINFOW as isize),
+            Some(WPARAM(0)),
+            Some(LPARAM(&info as *const TTTOOLINFOW as isize)),
         );
     }
 }
 
 /// Show the wallpaper's current settings.
 unsafe fn load(hwnd: HWND) {
-    let (anim, theme) = unpack_state(SendMessageW(target(), WM_GET_STATE, WPARAM(0), LPARAM(0)).0);
+    let (anim, theme) =
+        unpack_state(SendMessageW(target(), WM_GET_STATE, Some(WPARAM(0)), Some(LPARAM(0))).0);
     let row = row_of(&anim_rows(), anim);
     LAST_ANIM_ROW.store(row as isize, Ordering::Relaxed);
     SendMessageW(
-        GetDlgItem(hwnd, ID_ANIMATION as i32).unwrap_or_default(),
+        GetDlgItem(Some(hwnd), ID_ANIMATION as i32).unwrap_or_default(),
         CB_SETCURSEL,
-        WPARAM(row),
-        LPARAM(0),
+        Some(WPARAM(row)),
+        Some(LPARAM(0)),
     );
     let theme_row = row_of(&theme_rows(), theme);
     LAST_THEME_ROW.store(theme_row as isize, Ordering::Relaxed);
     SendMessageW(
-        GetDlgItem(hwnd, ID_THEME as i32).unwrap_or_default(),
+        GetDlgItem(Some(hwnd), ID_THEME as i32).unwrap_or_default(),
         LB_SETCURSEL,
-        WPARAM(theme_row),
-        LPARAM(0),
+        Some(WPARAM(theme_row)),
+        Some(LPARAM(0)),
     );
     // Before `show`, which labels disabled sliders "Loops only".
     set_applicable(hwnd, anim);
@@ -550,30 +555,32 @@ unsafe fn load(hwnd: HWND) {
         show(hwnd, id, get_tweak(id));
     }
     SendMessageW(
-        GetDlgItem(hwnd, ID_FPS as i32).unwrap_or_default(),
+        GetDlgItem(Some(hwnd), ID_FPS as i32).unwrap_or_default(),
         CB_SETCURSEL,
-        WPARAM(frame_rate_index(get_tweak(FPS))),
-        LPARAM(0),
+        Some(WPARAM(frame_rate_index(get_tweak(FPS)))),
+        Some(LPARAM(0)),
     );
     let clock = get_tweak(CLOCK) != 0.0;
     SendMessageW(
-        GetDlgItem(hwnd, ID_CLOCK as i32).unwrap_or_default(),
+        GetDlgItem(Some(hwnd), ID_CLOCK as i32).unwrap_or_default(),
         BM_SETCHECK,
-        WPARAM(usize::from(clock)),
-        LPARAM(0),
+        Some(WPARAM(usize::from(clock))),
+        Some(LPARAM(0)),
     );
 }
 
 fn get_tweak(id: usize) -> f32 {
     // SAFETY: plain message send.
-    unsafe { SendMessageW(target(), WM_GET_TWEAK, WPARAM(id), LPARAM(0)).0 as f32 / 1000.0 }
+    unsafe {
+        SendMessageW(target(), WM_GET_TWEAK, Some(WPARAM(id)), Some(LPARAM(0))).0 as f32 / 1000.0
+    }
 }
 
 /// Grey out the controls that do nothing for `anim`.
 unsafe fn set_applicable(hwnd: HWND, anim: usize) {
     let (object_scale, clock) = applies(anim);
     for (id, on) in [(ID_SLIDER + OBJECT_SCALE, object_scale), (ID_CLOCK, clock)] {
-        if let Ok(control) = GetDlgItem(hwnd, id as i32) {
+        if let Ok(control) = GetDlgItem(Some(hwnd), id as i32) {
             let _ = EnableWindow(control, on);
         }
     }
@@ -583,8 +590,8 @@ unsafe fn set_applicable(hwnd: HWND, anim: usize) {
         ID_VALUE + OBJECT_SCALE,
         ID_CLOCK_LABEL,
     ] {
-        if let Ok(label) = GetDlgItem(hwnd, id as i32) {
-            let _ = InvalidateRect(label, None, true);
+        if let Ok(label) = GetDlgItem(Some(hwnd), id as i32) {
+            let _ = InvalidateRect(Some(label), None, true);
         }
     }
 }
@@ -598,20 +605,20 @@ unsafe fn label_inactive(hwnd: HWND, id: usize) -> bool {
         ID_CLOCK_LABEL => ID_CLOCK,
         _ => return false,
     };
-    GetDlgItem(hwnd, owner as i32).is_ok_and(|c| !IsWindowEnabled(c).as_bool())
+    GetDlgItem(Some(hwnd), owner as i32).is_ok_and(|c| !IsWindowEnabled(c).as_bool())
 }
 
 /// Move slider `id` to `value` and update its readout.
 unsafe fn show(hwnd: HWND, id: usize, value: f32) {
-    if let Ok(slider) = GetDlgItem(hwnd, (ID_SLIDER + id) as i32) {
+    if let Ok(slider) = GetDlgItem(Some(hwnd), (ID_SLIDER + id) as i32) {
         SendMessageW(
             slider,
             TBM_SETPOS,
-            WPARAM(1),
-            LPARAM(slider_pos(value) as isize),
+            Some(WPARAM(1)),
+            Some(LPARAM(slider_pos(value) as isize)),
         );
     }
-    if let Ok(label) = GetDlgItem(hwnd, (ID_VALUE + id) as i32) {
+    if let Ok(label) = GetDlgItem(Some(hwnd), (ID_VALUE + id) as i32) {
         let text = if label_inactive(hwnd, ID_VALUE + id) {
             "Loops only".into()
         } else {
@@ -629,13 +636,13 @@ unsafe fn pick(
     rows: &[Row],
     last: &AtomicIsize,
 ) -> Option<usize> {
-    let sel = SendMessageW(list, get, WPARAM(0), LPARAM(0)).0;
+    let sel = SendMessageW(list, get, Some(WPARAM(0)), Some(LPARAM(0))).0;
     if sel < 0 {
         return None;
     }
     let row = nearest_item_row(rows, sel as usize, sel < last.load(Ordering::Relaxed));
     if row != sel as usize {
-        SendMessageW(list, set, WPARAM(row), LPARAM(0));
+        SendMessageW(list, set, Some(WPARAM(row)), Some(LPARAM(0)));
     }
     last.store(row as isize, Ordering::Relaxed);
     match rows.get(row) {
@@ -701,7 +708,7 @@ fn tweak(id: usize, value: f32, commit: bool) {
     // SAFETY: plain message post.
     unsafe {
         let _ = PostMessageW(
-            target(),
+            Some(target()),
             WM_TWEAK,
             WPARAM(wp),
             LPARAM((value * 1000.0).round() as isize),
@@ -774,7 +781,7 @@ unsafe fn draw_theme_row(d: &DRAWITEMSTRUCT) {
             c.0 as u32 | (c.1 as u32) << 8 | (c.2 as u32) << 16,
         ));
         FillRect(d.hDC, &r, brush);
-        let _ = DeleteObject(brush);
+        let _ = DeleteObject(brush.into());
     };
     let (left, right) = (rc.left + name_w, rc.right - px(8, s));
     let bg_w = px(26, s);
@@ -859,11 +866,13 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                     let rows = anim_rows();
                     let picked = pick(source, (CB_GETCURSEL, CB_SETCURSEL), &rows, &LAST_ANIM_ROW);
                     if let Some(anim) = picked {
-                        let _ = PostMessageW(target(), WM_SET_ANIMATION, WPARAM(anim), LPARAM(0));
+                        let _ =
+                            PostMessageW(Some(target()), WM_SET_ANIMATION, WPARAM(anim), LPARAM(0));
                     }
                 }
                 ID_FPS if code == CBN_SELCHANGE => {
-                    let sel = SendMessageW(source, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+                    let sel =
+                        SendMessageW(source, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0;
                     if let Some(&(fps, _)) = FRAME_RATES.get(sel as usize) {
                         tweak(FPS, fps, true);
                     }
@@ -872,29 +881,36 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                     let rows = theme_rows();
                     let picked = pick(source, (LB_GETCURSEL, LB_SETCURSEL), &rows, &LAST_THEME_ROW);
                     if let Some(theme) = picked {
-                        let _ = PostMessageW(target(), WM_SET_THEME, WPARAM(theme), LPARAM(0));
+                        let _ =
+                            PostMessageW(Some(target()), WM_SET_THEME, WPARAM(theme), LPARAM(0));
                     }
                 }
                 ID_CLOCK | ID_CLOCK_LABEL if code == 0 && !label_inactive(hwnd, ID_CLOCK_LABEL) => {
                     // BN_CLICKED / STN_CLICKED; a label click toggles the box.
-                    let check = GetDlgItem(hwnd, ID_CLOCK as i32).unwrap_or_default();
-                    let mut on = SendMessageW(check, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0;
+                    let check = GetDlgItem(Some(hwnd), ID_CLOCK as i32).unwrap_or_default();
+                    let mut on =
+                        SendMessageW(check, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 != 0;
                     if id == ID_CLOCK_LABEL {
                         on = !on;
-                        SendMessageW(check, BM_SETCHECK, WPARAM(usize::from(on)), LPARAM(0));
+                        SendMessageW(
+                            check,
+                            BM_SETCHECK,
+                            Some(WPARAM(usize::from(on))),
+                            Some(LPARAM(0)),
+                        );
                     }
                     tweak(CLOCK, f32::from(u8::from(on)), true);
                 }
                 ID_RESET => {
                     SendMessageW(
-                        GetDlgItem(hwnd, ID_FPS as i32).unwrap_or_default(),
+                        GetDlgItem(Some(hwnd), ID_FPS as i32).unwrap_or_default(),
                         CB_SETCURSEL,
-                        WPARAM(0),
-                        LPARAM(0),
+                        Some(WPARAM(0)),
+                        Some(LPARAM(0)),
                     );
                     tweak(FPS, 0.0, true);
                     for (sid, _, _, _, default) in SLIDERS {
-                        if let Ok(slider) = GetDlgItem(hwnd, (ID_SLIDER + sid) as i32) {
+                        if let Ok(slider) = GetDlgItem(Some(hwnd), (ID_SLIDER + sid) as i32) {
                             // Leave greyed-out sliders alone.
                             if !IsWindowEnabled(slider).as_bool() {
                                 continue;
@@ -915,9 +931,10 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
             let slider = HWND(lp.0 as *mut _);
             let id = (GetDlgCtrlID(slider) as usize).wrapping_sub(ID_SLIDER);
             if SLIDERS.iter().any(|s| s.0 == id) {
-                let pos = SendMessageW(slider, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
+                let pos =
+                    SendMessageW(slider, TBM_GETPOS, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
                 let value = slider_value(pos);
-                if let Ok(label) = GetDlgItem(hwnd, (ID_VALUE + id) as i32) {
+                if let Ok(label) = GetDlgItem(Some(hwnd), (ID_VALUE + id) as i32) {
                     let _ = SetWindowTextW(label, &HSTRING::from(value_label(id, value)));
                 }
                 // Live while dragging; saved on release.

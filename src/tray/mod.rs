@@ -138,7 +138,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
             0,
             None,
             None,
-            hinst,
+            Some(hinst.into()),
             Some(wallpaper.0 as *const _),
         )?;
         ICON.store(make_icon(ICON_RGB).0 as isize, Ordering::Relaxed);
@@ -262,8 +262,9 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             if let Ok(menu) = CreatePopupMenu() {
                 let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings…"));
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-                let (anim_i, _) =
-                    unpack_state(SendMessageW(target, WM_GET_STATE, WPARAM(0), LPARAM(0)).0);
+                let (anim_i, _) = unpack_state(
+                    SendMessageW(target, WM_GET_STATE, Some(WPARAM(0)), Some(LPARAM(0))).0,
+                );
                 let anims = crate::anim::ANIMATIONS.iter().map(|a| (a.1, a.2));
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Animation"));
@@ -271,8 +272,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 let clock = SendMessageW(
                     target,
                     crate::settings::WM_GET_TWEAK,
-                    WPARAM(crate::settings::CLOCK),
-                    LPARAM(0),
+                    Some(WPARAM(crate::settings::CLOCK)),
+                    Some(LPARAM(0)),
                 )
                 .0 != 0;
                 let flags = if clock {
@@ -304,20 +305,20 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     TPM_RETURNCMD | TPM_RIGHTBUTTON,
                     pt.x,
                     pt.y,
-                    0,
+                    Some(0),
                     hwnd,
                     None,
                 );
                 let _ = DestroyMenu(menu); // and its submenus
                 match cmd.0 as usize {
                     ID_PAUSE => {
-                        let _ = PostMessageW(target, WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(target), WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
                     }
                     ID_SETTINGS => crate::settings::open(target),
                     ID_CLOCK => {
                         // Toggle and save (value 0 or 1000).
                         let _ = PostMessageW(
-                            target,
+                            Some(target),
                             crate::settings::WM_TWEAK,
                             WPARAM(crate::settings::CLOCK | 1 << 8),
                             LPARAM(if clock { 0 } else { 1000 }),
@@ -329,11 +330,11 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                         }
                     }
                     ID_QUIT => {
-                        let _ = PostMessageW(target, WM_CLOSE, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(target), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
                     id if id >= ID_ANIM_BASE => {
                         let _ = PostMessageW(
-                            target,
+                            Some(target),
                             WM_SET_ANIMATION,
                             WPARAM(id - ID_ANIM_BASE),
                             LPARAM(0),

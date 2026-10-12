@@ -18,12 +18,12 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$saver/Contents/MacOS"
 
 if [ "${1:-}" = "--native" ]; then
-    cargo build --release -p glyphdrift -p glyphdrift-saver
+    cargo build --locked --release -p glyphdrift -p glyphdrift-saver
     cp target/release/glyphdrift "$bin"
     cp target/release/libglyphdrift_saver.dylib "$saver_bin"
 else
     for t in aarch64-apple-darwin x86_64-apple-darwin; do
-        cargo build --release -p glyphdrift -p glyphdrift-saver --target "$t"
+        cargo build --locked --release -p glyphdrift -p glyphdrift-saver --target "$t"
     done
     lipo -create -output "$bin" \
         target/aarch64-apple-darwin/release/glyphdrift \
@@ -34,7 +34,7 @@ else
 fi
 
 iconset=target/Glyphdrift.iconset
-cargo run --quiet --example macos_iconset -- "$iconset"
+cargo run --locked --quiet --example macos_iconset -- "$iconset"
 iconutil -c icns -o "$app/Contents/Resources/Glyphdrift.icns" "$iconset"
 
 sed "s/VERSION/$version/g" macos/Info.plist > "$app/Contents/Info.plist"

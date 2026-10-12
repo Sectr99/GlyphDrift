@@ -1,0 +1,15 @@
+# Weekly PRs for outdated GitHub Actions (pinned to commit SHAs) and Cargo dependencies.
+# Security alerts arrive regardless; these keep versions current so fixes are small.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]

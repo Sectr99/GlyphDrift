@@ -4,7 +4,7 @@ A live wallpaper for Windows 10/11 and macOS 12+: contour maps, ASCII art and ge
 
 **[glyphdrift.com](https://glyphdrift.com)** · **[Download the latest release](https://github.com/Sectr99/GlyphDrift/releases/latest)**
 
-- **Small:** one portable exe (about 0.7 MB) on Windows and a universal app (about 0.7 MB zipped) on macOS. No installer, no admin rights, and it never connects to the internet.
+- **Small:** one portable exe (about 0.9 MB) on Windows and a universal app (about 0.7 MB zipped) on macOS. No installer, no admin rights, and it never connects to the internet.
 - **23 animations:** Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour).
 - **22 themes:** Matrix, Mono, Amber CRT; Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Everforest, Monokai, Ayu Dark, Night Owl, Palenight, GitHub Dark, Oxocarbon, Poimandres; Synthwave '84, Claude.
 - **Pauses itself** while a fullscreen app is open or battery saver is on (Windows), or while the desktop is covered or Low Power Mode is on (macOS).

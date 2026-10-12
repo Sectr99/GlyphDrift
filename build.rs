@@ -27,6 +27,10 @@ fn main() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
     println!("cargo:rustc-link-arg-bins=/MANIFESTINPUT:{dir}\\app.manifest");
+    // Load imported DLLs (d2d1, dwrite, ...) from System32 only, never from the exe's own
+    // folder: a portable exe often runs from Downloads, where a planted DLL could wait.
+    // LOAD_LIBRARY_SEARCH_SYSTEM32; honored from Windows 10 1607.
+    println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
 
     let res = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("resources.res");
     let mut data = icon_res();

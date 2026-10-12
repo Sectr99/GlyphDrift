@@ -1,0 +1,4 @@
+# Windows: link the C runtime statically, so the exe runs without the Visual C++
+# Redistributable and doesn't load VCRUNTIME140.dll at all.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

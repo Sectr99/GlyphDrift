@@ -1,5 +1,7 @@
 # Build, test and lint both platforms on every push and pull request. Make both jobs
 # required checks on `main` (Settings > Branches) so neither build can break unnoticed.
+# Actions are pinned to commit SHAs (Dependabot keeps them current); warnings are denied
+# on the clippy runs, not through RUSTFLAGS, which would override .cargo/config.toml.
 name: CI
 
 on:
@@ -16,31 +18,30 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
   windows:
     name: Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets
-      - run: cargo test
-      - run: cargo build --release
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked --release
 
   macos:
     name: macOS
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets
-      - run: cargo clippy -p glyphdrift-saver
-      - run: cargo test
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked -p glyphdrift-saver -- -D warnings
+      - run: cargo test --locked
       # The app bundle, for this runner's architecture only; releases build universal.
       - run: macos/bundle.sh --native
       # The website's live previews: the animations as WebAssembly.
       - run: rustup target add wasm32-unknown-unknown
-      - run: cargo clippy -p glyphdrift-web --release --target wasm32-unknown-unknown
+      - run: cargo clippy --locked -p glyphdrift-web --release --target wasm32-unknown-unknown -- -D warnings

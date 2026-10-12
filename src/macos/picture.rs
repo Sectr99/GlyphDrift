@@ -287,6 +287,7 @@ impl DesktopPicture {
                     NSImageScaling::ScaleProportionallyUpOrDown.0 as isize,
                     |n| n.as_isize(),
                 );
+                // SAFETY: AppKit's constant keys.
                 let clipping = number(unsafe { NSWorkspaceDesktopImageAllowClippingKey })
                     .is_none_or(|n| n.as_bool());
                 self.originals.retain(|o| o.screen != name);

@@ -14,7 +14,7 @@ toml = "1"
 toml_edit = "0.25" # edits config.toml keeping its comments
 
 [target.'cfg(windows)'.dependencies.windows]
-version = "0.58"
+version = "0.62"
 features = [
     "Foundation_Numerics",
     "Win32_Foundation",

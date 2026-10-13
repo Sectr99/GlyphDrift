@@ -2,7 +2,10 @@
 
 #[cfg(windows)]
 fn main() {
-    if let Err(e) = glyphdrift::app::run() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let scr = std::env::current_exe()
+        .is_ok_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("scr")));
+    if let Err(e) = glyphdrift::app::run(glyphdrift::saver::mode(&args, scr)) {
         // No console in release builds: show a dialog.
         glyphdrift::app::fatal(&format!("{e}"));
     }

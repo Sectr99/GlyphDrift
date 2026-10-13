@@ -11,6 +11,8 @@ pub const SCALE: usize = 3;
 pub const OBJECT_SCALE: usize = 4;
 /// Clock on/off (1 or 0).
 pub const CLOCK: usize = 5;
+/// Show on lock screen on/off (1 or 0).
+pub const LOCK_SCREEN: usize = 6;
 
 /// (tweak id, label, slider min, slider max, default value)
 pub const SLIDERS: [(usize, &str, i32, i32, f32); 4] = [
@@ -48,6 +50,10 @@ pub fn hint(id: usize) -> &'static str {
         CLOCK => {
             "Time and date at the center of Topographic drift; the contour lines flow \
              around it."
+        }
+        LOCK_SCREEN => {
+            "Sets the lock screen picture to a still frame of the animation, updated every few \
+             minutes. Turning it off brings back your own picture."
         }
         _ => "",
     }

@@ -38,6 +38,8 @@ const ID_QUIT: usize = 2;
 const ID_AUTOSTART: usize = 3;
 const ID_SETTINGS: usize = 4;
 const ID_CLOCK: usize = 5;
+const ID_LOCK: usize = 6;
+const ID_SAVER: usize = 7;
 const ID_ANIM_BASE: usize = 100;
 /// Animation index in the low byte, theme index in the next.
 pub fn pack_state(anim: usize, theme: usize) -> isize {
@@ -269,19 +271,29 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Animation"));
                 }
-                let clock = SendMessageW(
-                    target,
-                    crate::settings::WM_GET_TWEAK,
-                    Some(WPARAM(crate::settings::CLOCK)),
-                    Some(LPARAM(0)),
-                )
-                .0 != 0;
-                let flags = if clock {
-                    MF_STRING | MF_CHECKED
-                } else {
-                    MF_STRING
+                let on = |setting: usize| {
+                    SendMessageW(
+                        target,
+                        crate::settings::WM_GET_TWEAK,
+                        Some(WPARAM(setting)),
+                        Some(LPARAM(0)),
+                    )
+                    .0 != 0
                 };
-                let _ = AppendMenuW(menu, flags, ID_CLOCK, w!("Show clock"));
+                let clock = on(crate::settings::CLOCK);
+                let lock = on(crate::settings::LOCK_SCREEN);
+                for (id, checked, label) in [
+                    (ID_CLOCK, clock, w!("Show clock")),
+                    (ID_LOCK, lock, w!("Show on lock screen")),
+                ] {
+                    let flags = if checked {
+                        MF_STRING | MF_CHECKED
+                    } else {
+                        MF_STRING
+                    };
+                    let _ = AppendMenuW(menu, flags, id, label);
+                }
+                let _ = AppendMenuW(menu, MF_STRING, ID_SAVER, w!("Install screen saver…"));
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
                 let autostart = crate::autostart::enabled();
                 let flags = if autostart {
@@ -315,14 +327,24 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                         let _ = PostMessageW(Some(target), WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
                     }
                     ID_SETTINGS => crate::settings::open(target),
-                    ID_CLOCK => {
+                    ID_CLOCK | ID_LOCK => {
                         // Toggle and save (value 0 or 1000).
+                        let (setting, on) = if cmd.0 as usize == ID_CLOCK {
+                            (crate::settings::CLOCK, clock)
+                        } else {
+                            (crate::settings::LOCK_SCREEN, lock)
+                        };
                         let _ = PostMessageW(
                             Some(target),
                             crate::settings::WM_TWEAK,
-                            WPARAM(crate::settings::CLOCK | 1 << 8),
-                            LPARAM(if clock { 0 } else { 1000 }),
+                            WPARAM(setting | 1 << 8),
+                            LPARAM(if on { 0 } else { 1000 }),
                         );
+                    }
+                    ID_SAVER => {
+                        if let Err(e) = crate::saver::install() {
+                            log!("screen saver: {e}");
+                        }
                     }
                     ID_AUTOSTART => {
                         if let Err(e) = crate::autostart::set(!autostart) {

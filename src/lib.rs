@@ -22,12 +22,16 @@ pub mod app;
 pub mod autostart;
 #[cfg(windows)]
 pub mod desktop;
+#[cfg(windows)]
+pub mod lockscreen;
 #[cfg(any(windows, target_os = "macos"))]
 pub mod log;
 #[cfg(windows)]
 pub mod power;
 #[cfg(windows)]
 pub mod render;
+#[cfg(windows)]
+pub mod saver;
 #[cfg(windows)]
 pub mod settings;
 #[cfg(windows)]

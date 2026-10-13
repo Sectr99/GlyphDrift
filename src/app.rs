@@ -543,12 +543,10 @@ pub fn run(mode: Mode) -> Result<()> {
     }
     // The screen saver only reads the settings, and may run beside the wallpaper.
     let first_run = mode == Mode::Wallpaper && {
-        config::migrate();
         if !first_instance() {
             return Ok(());
         }
         crate::log::init();
-        crate::autostart::migrate();
         crate::saver::refresh_installed();
         config::create_if_missing()
     };

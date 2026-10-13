@@ -9,8 +9,6 @@ use windows::Win32::System::Registry::{
 
 const RUN_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
 const VALUE: PCWSTR = w!("Glyphdrift");
-/// Run entry names before the Glyphdrift rename.
-const LEGACY_VALUES: [PCWSTR; 2] = [w!("WallMotion"), w!("ascii-wallpaper")];
 
 /// This exe's path, quoted.
 fn command() -> Option<String> {
@@ -62,27 +60,5 @@ pub fn set(on: bool) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("registry error {}", r.0))
-    }
-}
-
-/// Move a pre-rename Run entry to the current name and exe.
-pub fn migrate() {
-    for legacy in LEGACY_VALUES {
-        // SAFETY: constant strings; no output buffers.
-        let found = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                RUN_KEY,
-                legacy,
-                RRF_RT_REG_SZ,
-                None,
-                None,
-                None,
-            )
-        } == ERROR_SUCCESS;
-        if found && set(true).is_ok() {
-            // SAFETY: constant strings.
-            let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, legacy) };
-        }
     }
 }

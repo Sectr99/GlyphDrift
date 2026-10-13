@@ -1,5 +1,6 @@
-//! Renderer: Direct2D and DirectWrite into the WM_PAINT DC. Each brightness level's
-//! glyphs go out in one `DrawGlyphRun`, so the grid costs at most `LEVELS` calls.
+//! Renderer: Direct2D and DirectWrite into the WM_PAINT DC, or into a PNG (lock screen).
+//! Each brightness level's glyphs go out in one `DrawGlyphRun`, so the grid costs at
+//! most `LEVELS` calls.
 
 use std::mem::ManuallyDrop;
 
@@ -8,14 +9,14 @@ use crate::grid::Grid;
 use crate::shape::Shape;
 use crate::theme;
 use windows::core::{w, Result, BOOL, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, RECT};
+use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, GENERIC_WRITE, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
-    D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
-    D2D_RECT_F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F,
+    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED,
+    D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE,
@@ -29,7 +30,12 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC;
-use windows_numerics::Vector2;
+use windows::Win32::Graphics::Imaging::{
+    CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppPBGRA,
+    IWICImagingFactory, WICBitmapCacheOnDemand, WICBitmapEncoderNoCache,
+};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows_numerics::{Matrix3x2, Vector2};
 
 const LEVELS: usize = 16;
 const FALLBACK_FONT: &str = "Consolas";
@@ -204,6 +210,87 @@ impl Renderer {
         grid: &Grid,
         shapes: &[Shape],
     ) -> Result<()> {
+        self.prepare(grid, shapes)?;
+        if self.target.is_none() {
+            self.target = Some(self.create_target()?);
+        }
+        let t = self.target.as_ref().unwrap();
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        // SAFETY: live interfaces; `rect` outlives the call.
+        unsafe {
+            t.rt.BindDC(hdc, &rect)?;
+            t.rt.BeginDraw();
+            self.draw(&t.rt, &t.brushes, shapes)?;
+            t.rt.EndDraw(None, None)
+        }
+    }
+
+    /// Write the frame to `path` as a PNG of `size` px, showing the window area that starts
+    /// at `offset` (e.g. the primary monitor within a desktop-spanning window).
+    pub fn render_png(
+        &mut self,
+        path: &std::path::Path,
+        size: (u32, u32),
+        offset: (f32, f32),
+        grid: &Grid,
+        shapes: &[Shape],
+    ) -> Result<()> {
+        self.prepare(grid, shapes)?;
+        // SAFETY: COM calls on live interfaces created here; COM is initialized on this
+        // thread (app::run); `path` is NUL-terminated by HSTRING and outlives the calls.
+        unsafe {
+            let wic: IWICImagingFactory =
+                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+            let bitmap = wic.CreateBitmap(
+                size.0,
+                size.1,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapCacheOnDemand,
+            )?;
+            let props = D2D1_RENDER_TARGET_PROPERTIES {
+                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                // Direct2D takes this WIC format only as premultiplied; the frame is opaque.
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                usage: D2D1_RENDER_TARGET_USAGE_NONE,
+                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+            };
+            let rt = self.factory.CreateWicBitmapRenderTarget(&bitmap, &props)?;
+            let brushes = self
+                .palette
+                .iter()
+                .map(|c| rt.CreateSolidColorBrush(c, None))
+                .collect::<Result<Vec<_>>>()?;
+            rt.BeginDraw();
+            rt.SetTransform(&Matrix3x2::translation(-offset.0, -offset.1));
+            self.draw(&rt, &brushes, shapes)?;
+            rt.EndDraw(None, None)?;
+
+            let stream = wic.CreateStream()?;
+            stream.InitializeFromFilename(&HSTRING::from(path.as_os_str()), GENERIC_WRITE.0)?;
+            let encoder = wic.CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null())?;
+            encoder.Initialize(&stream, WICBitmapEncoderNoCache)?;
+            let mut frame = None;
+            encoder.CreateNewFrame(&mut frame, std::ptr::null_mut())?;
+            let frame = frame.ok_or_else(windows::core::Error::empty)?;
+            frame.Initialize(None)?;
+            frame.WriteSource(&bitmap, std::ptr::null())?;
+            frame.Commit()?;
+            encoder.Commit()
+        }
+    }
+
+    /// Glyph batches and text formats for the frame.
+    fn prepare(&mut self, grid: &Grid, shapes: &[Shape]) -> Result<()> {
         for b in &mut self.batches {
             b.clear();
         }
@@ -220,7 +307,6 @@ impl Renderer {
                 );
             }
         }
-
         for s in shapes {
             if let Shape::Text { size, weight, .. } = *s {
                 let key = (size.to_bits(), weight);
@@ -244,14 +330,13 @@ impl Renderer {
                 }
             }
         }
-
-        // SAFETY: live interfaces; each batch's buffers are equally long and outlive the calls.
-        unsafe {
-            for b in &mut self.batches {
-                let n = b.codepoints.len();
-                b.glyphs.resize(n, 0);
-                b.advances.resize(n, 0.0);
-                if n > 0 {
+        for b in &mut self.batches {
+            let n = b.codepoints.len();
+            b.glyphs.resize(n, 0);
+            b.advances.resize(n, 0.0);
+            if n > 0 {
+                // SAFETY: the buffers hold `n` codepoints and `n` glyph slots.
+                unsafe {
                     self.face.GetGlyphIndices(
                         b.codepoints.as_ptr(),
                         n as u32,
@@ -259,185 +344,183 @@ impl Renderer {
                     )?;
                 }
             }
+        }
+        Ok(())
+    }
 
-            if self.target.is_none() {
-                self.target = Some(self.create_target()?);
+    /// The prepared frame into `rt` (between BeginDraw and EndDraw), with `brushes` made
+    /// on that target from the palette.
+    unsafe fn draw(
+        &self,
+        rt: &ID2D1RenderTarget,
+        brushes: &[ID2D1SolidColorBrush],
+        shapes: &[Shape],
+    ) -> Result<()> {
+        rt.Clear(Some(&self.bg));
+        let origin = Vector2 {
+            X: 0.0,
+            Y: self.baseline,
+        };
+        for (b, brush) in self.batches.iter().zip(brushes) {
+            if b.glyphs.is_empty() {
+                continue;
             }
-            let t = self.target.as_ref().unwrap();
-            let rect = RECT {
-                left: 0,
-                top: 0,
-                right: width,
-                bottom: height,
+            let run = DWRITE_GLYPH_RUN {
+                fontFace: ManuallyDrop::new(Some(self.face.clone())),
+                fontEmSize: self.em,
+                glyphCount: b.glyphs.len() as u32,
+                glyphIndices: b.glyphs.as_ptr(),
+                glyphAdvances: b.advances.as_ptr(),
+                glyphOffsets: b.offsets.as_ptr(),
+                isSideways: BOOL(0),
+                bidiLevel: 0,
             };
-            t.rt.BindDC(hdc, &rect)?;
-            t.rt.BeginDraw();
-            t.rt.Clear(Some(&self.bg));
-            let origin = Vector2 {
-                X: 0.0,
-                Y: self.baseline,
-            };
-            for (b, brush) in self.batches.iter().zip(&t.brushes) {
-                if b.glyphs.is_empty() {
-                    continue;
+            rt.DrawGlyphRun(origin, &run, brush, DWRITE_MEASURING_MODE_NATURAL);
+            // Release the reference `clone` took.
+            drop(ManuallyDrop::into_inner(run.fontFace));
+        }
+        let pt = |p: (f32, f32)| Vector2 { X: p.0, Y: p.1 };
+        let mut i = 0;
+        while i < shapes.len() {
+            let s = &shapes[i];
+            i += 1;
+            match *s {
+                Shape::Polygon { ref points, level } if level > 0 && points.len() >= 3 => {
+                    // ponytail: a path per polygon per frame; cache if fills multiply.
+                    let geom = self.factory.CreatePathGeometry()?;
+                    let sink = geom.Open()?;
+                    sink.BeginFigure(pt(points[0]), D2D1_FIGURE_BEGIN_FILLED);
+                    let rest: Vec<_> = points[1..].iter().map(|&p| pt(p)).collect();
+                    sink.AddLines(&rest);
+                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                    sink.Close()?;
+                    rt.FillGeometry(&geom, &brushes[level_index(level)], None);
                 }
-                let run = DWRITE_GLYPH_RUN {
-                    fontFace: ManuallyDrop::new(Some(self.face.clone())),
-                    fontEmSize: self.em,
-                    glyphCount: b.glyphs.len() as u32,
-                    glyphIndices: b.glyphs.as_ptr(),
-                    glyphAdvances: b.advances.as_ptr(),
-                    glyphOffsets: b.offsets.as_ptr(),
-                    isSideways: BOOL(0),
-                    bidiLevel: 0,
-                };
-                t.rt.DrawGlyphRun(origin, &run, brush, DWRITE_MEASURING_MODE_NATURAL);
-                // Release the reference `clone` took.
-                drop(ManuallyDrop::into_inner(run.fontFace));
-            }
-            let pt = |p: (f32, f32)| Vector2 { X: p.0, Y: p.1 };
-            let mut i = 0;
-            while i < shapes.len() {
-                let s = &shapes[i];
-                i += 1;
-                match *s {
-                    Shape::Polygon { ref points, level } if level > 0 && points.len() >= 3 => {
-                        // ponytail: a path per polygon per frame; cache if fills multiply.
-                        let geom = self.factory.CreatePathGeometry()?;
-                        let sink = geom.Open()?;
-                        sink.BeginFigure(pt(points[0]), D2D1_FIGURE_BEGIN_FILLED);
-                        let rest: Vec<_> = points[1..].iter().map(|&p| pt(p)).collect();
-                        sink.AddLines(&rest);
-                        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-                        sink.Close()?;
-                        t.rt.FillGeometry(&geom, &t.brushes[level_index(level)], None);
-                    }
-                    Shape::Line { a, b, width, level } if level > 0 => {
-                        // Consecutive identical lines: one path, order kept.
-                        let color = level_index(level);
-                        let start = i - 1;
-                        while let Some(Shape::Line {
-                            width: w, level: l, ..
-                        }) = shapes.get(i)
-                        {
-                            if *w != width || *l == 0 || level_index(*l) != color {
-                                break;
-                            }
-                            i += 1;
+                Shape::Line { a, b, width, level } if level > 0 => {
+                    // Consecutive identical lines: one path, order kept.
+                    let color = level_index(level);
+                    let start = i - 1;
+                    while let Some(Shape::Line {
+                        width: w, level: l, ..
+                    }) = shapes.get(i)
+                    {
+                        if *w != width || *l == 0 || level_index(*l) != color {
+                            break;
                         }
-                        let brush = &t.brushes[color];
-                        if i - start == 1 {
-                            t.rt.DrawLine(pt(a), pt(b), brush, width, None);
+                        i += 1;
+                    }
+                    let brush = &brushes[color];
+                    if i - start == 1 {
+                        rt.DrawLine(pt(a), pt(b), brush, width, None);
+                        continue;
+                    }
+                    let geom = self.factory.CreatePathGeometry()?;
+                    let sink = geom.Open()?;
+                    let mut end: Option<(f32, f32)> = None;
+                    for line in &shapes[start..i] {
+                        let Shape::Line { a, b, .. } = *line else {
+                            continue;
+                        };
+                        // Continuing segments extend the figure.
+                        if end != Some(a) {
+                            if end.is_some() {
+                                sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                            }
+                            sink.BeginFigure(pt(a), D2D1_FIGURE_BEGIN_HOLLOW);
+                        }
+                        sink.AddLine(pt(b));
+                        end = Some(b);
+                    }
+                    sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                    sink.Close()?;
+                    rt.DrawGeometry(&geom, brush, width, None);
+                }
+                Shape::Circle { c, r, fill, level } if level > 0 => {
+                    let brush = &brushes[level_index(level)];
+                    let e = D2D1_ELLIPSE {
+                        point: pt(c),
+                        radiusX: r,
+                        radiusY: r,
+                    };
+                    if fill {
+                        rt.FillEllipse(&e, brush);
+                    } else {
+                        rt.DrawEllipse(&e, brush, 1.0, None);
+                    }
+                }
+                Shape::Text {
+                    c,
+                    size,
+                    weight,
+                    ref text,
+                    level,
+                } if level > 0 => {
+                    let key = (size.to_bits(), weight);
+                    if let Some((_, format)) = self.formats.iter().find(|f| f.0 == key) {
+                        let text: Vec<u16> = text.encode_utf16().collect();
+                        // Centered in a box wider than any line.
+                        let rect = D2D_RECT_F {
+                            left: c.0 - size * 40.0,
+                            top: c.1 - size,
+                            right: c.0 + size * 40.0,
+                            bottom: c.1 + size,
+                        };
+                        rt.DrawText(
+                            &text,
+                            format,
+                            &rect,
+                            &brushes[level_index(level)],
+                            D2D1_DRAW_TEXT_OPTIONS_NONE,
+                            DWRITE_MEASURING_MODE_NATURAL,
+                        );
+                    }
+                }
+                Shape::Curve { width, level, .. } if level > 0 => {
+                    // Consecutive curves that look the same share one path.
+                    let color = level_index(level);
+                    let start = i - 1;
+                    while let Some(Shape::Curve {
+                        width: w, level: l, ..
+                    }) = shapes.get(i)
+                    {
+                        if *w != width || *l == 0 || level_index(*l) != color {
+                            break;
+                        }
+                        i += 1;
+                    }
+                    let geom = self.factory.CreatePathGeometry()?;
+                    let sink = geom.Open()?;
+                    for curve in &shapes[start..i] {
+                        let Shape::Curve { ref points, .. } = *curve else {
+                            continue;
+                        };
+                        if points.len() < 2 {
                             continue;
                         }
-                        let geom = self.factory.CreatePathGeometry()?;
-                        let sink = geom.Open()?;
-                        let mut end: Option<(f32, f32)> = None;
-                        for line in &shapes[start..i] {
-                            let Shape::Line { a, b, .. } = *line else {
-                                continue;
-                            };
-                            // Continuing segments extend the figure.
-                            if end != Some(a) {
-                                if end.is_some() {
-                                    sink.EndFigure(D2D1_FIGURE_END_OPEN);
-                                }
-                                sink.BeginFigure(pt(a), D2D1_FIGURE_BEGIN_HOLLOW);
-                            }
-                            sink.AddLine(pt(b));
-                            end = Some(b);
-                        }
-                        sink.EndFigure(D2D1_FIGURE_END_OPEN);
-                        sink.Close()?;
-                        t.rt.DrawGeometry(&geom, brush, width, None);
-                    }
-                    Shape::Circle { c, r, fill, level } if level > 0 => {
-                        let brush = &t.brushes[level_index(level)];
-                        let e = D2D1_ELLIPSE {
-                            point: pt(c),
-                            radiusX: r,
-                            radiusY: r,
-                        };
-                        if fill {
-                            t.rt.FillEllipse(&e, brush);
+                        let (segments, closed) = crate::shape::catmull_rom(points);
+                        let beziers: Vec<D2D1_BEZIER_SEGMENT> = segments
+                            .iter()
+                            .map(|s| D2D1_BEZIER_SEGMENT {
+                                point1: pt(s[0]),
+                                point2: pt(s[1]),
+                                point3: pt(s[2]),
+                            })
+                            .collect();
+                        sink.BeginFigure(pt(points[0]), D2D1_FIGURE_BEGIN_HOLLOW);
+                        sink.AddBeziers(&beziers);
+                        sink.EndFigure(if closed {
+                            D2D1_FIGURE_END_CLOSED
                         } else {
-                            t.rt.DrawEllipse(&e, brush, 1.0, None);
-                        }
+                            D2D1_FIGURE_END_OPEN
+                        });
                     }
-                    Shape::Text {
-                        c,
-                        size,
-                        weight,
-                        ref text,
-                        level,
-                    } if level > 0 => {
-                        let key = (size.to_bits(), weight);
-                        if let Some((_, format)) = self.formats.iter().find(|f| f.0 == key) {
-                            let text: Vec<u16> = text.encode_utf16().collect();
-                            // Centered in a box wider than any line.
-                            let rect = D2D_RECT_F {
-                                left: c.0 - size * 40.0,
-                                top: c.1 - size,
-                                right: c.0 + size * 40.0,
-                                bottom: c.1 + size,
-                            };
-                            t.rt.DrawText(
-                                &text,
-                                format,
-                                &rect,
-                                &t.brushes[level_index(level)],
-                                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                                DWRITE_MEASURING_MODE_NATURAL,
-                            );
-                        }
-                    }
-                    Shape::Curve { width, level, .. } if level > 0 => {
-                        // Consecutive curves that look the same share one path.
-                        let color = level_index(level);
-                        let start = i - 1;
-                        while let Some(Shape::Curve {
-                            width: w, level: l, ..
-                        }) = shapes.get(i)
-                        {
-                            if *w != width || *l == 0 || level_index(*l) != color {
-                                break;
-                            }
-                            i += 1;
-                        }
-                        let geom = self.factory.CreatePathGeometry()?;
-                        let sink = geom.Open()?;
-                        for curve in &shapes[start..i] {
-                            let Shape::Curve { ref points, .. } = *curve else {
-                                continue;
-                            };
-                            if points.len() < 2 {
-                                continue;
-                            }
-                            let (segments, closed) = crate::shape::catmull_rom(points);
-                            let beziers: Vec<D2D1_BEZIER_SEGMENT> = segments
-                                .iter()
-                                .map(|s| D2D1_BEZIER_SEGMENT {
-                                    point1: pt(s[0]),
-                                    point2: pt(s[1]),
-                                    point3: pt(s[2]),
-                                })
-                                .collect();
-                            sink.BeginFigure(pt(points[0]), D2D1_FIGURE_BEGIN_HOLLOW);
-                            sink.AddBeziers(&beziers);
-                            sink.EndFigure(if closed {
-                                D2D1_FIGURE_END_CLOSED
-                            } else {
-                                D2D1_FIGURE_END_OPEN
-                            });
-                        }
-                        sink.Close()?;
-                        t.rt.DrawGeometry(&geom, &t.brushes[color], width, None);
-                    }
-                    _ => {} // level 0 is invisible
+                    sink.Close()?;
+                    rt.DrawGeometry(&geom, &brushes[color], width, None);
                 }
+                _ => {} // level 0 is invisible
             }
-            t.rt.EndDraw(None, None)
         }
+        Ok(())
     }
 
     fn create_target(&self) -> Result<Target> {
@@ -468,7 +551,47 @@ impl Renderer {
 
 #[cfg(test)]
 mod tests {
-    use super::Batch;
+    use super::{Batch, Renderer};
+    use crate::config::Rgb;
+    use crate::grid::Grid;
+    use crate::shape::Shape;
+
+    #[test]
+    fn renders_a_frame_to_png() {
+        // SAFETY: COM for WIC on this test thread.
+        let _ = unsafe {
+            windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            )
+        };
+        let stops = [Rgb(40, 40, 40), Rgb(120, 120, 120), Rgb(255, 255, 255)];
+        let mut r = Renderer::new("Consolas", 16, Rgb(0, 0, 0), &stops, 0.0).unwrap();
+        let mut grid = Grid::new(20, 10);
+        grid.set(
+            3,
+            2,
+            crate::grid::Cell {
+                ch: '#',
+                brightness: 255,
+            },
+        );
+        let shapes = [Shape::Line {
+            a: (0.0, 0.0),
+            b: (100.0, 50.0),
+            width: 2.0,
+            level: 200,
+        }];
+        let path = std::env::temp_dir().join("glyphdrift-render-test.png");
+        r.render_png(&path, (160, 90), (10.0, 5.0), &grid, &shapes)
+            .unwrap();
+        let png = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(&png[1..4], b"PNG");
+        // Width and height in the IHDR chunk.
+        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 160);
+        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 90);
+    }
 
     #[test]
     fn batch_offsets_are_absolute_with_y_up() {

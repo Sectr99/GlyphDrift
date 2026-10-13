@@ -31,8 +31,9 @@ pub struct General {
     pub clock: bool,
     /// macOS: stop below the menu bar and set the desktop picture to the theme background.
     pub match_menu_bar: bool,
-    /// macOS: set the desktop picture to a still frame of the animation, which the lock
-    /// screen shows.
+    /// Show a still frame of the animation on the lock screen (macOS: as the desktop
+    /// picture; Windows: as the lock screen picture). On by default only on macOS, where
+    /// it was introduced; on Windows it replaces a picture the user chose.
     pub lock_screen: bool,
     pub pause_on_fullscreen: bool,
     pub pause_on_battery_saver: bool,
@@ -73,7 +74,7 @@ impl Default for General {
             object_scale: 1.0,
             clock: false,
             match_menu_bar: false,
-            lock_screen: true, // only takes effect on macOS
+            lock_screen: cfg!(target_os = "macos"),
             pause_on_fullscreen: true,
             pause_on_battery_saver: true,
         }

@@ -20,6 +20,10 @@ version = "0.3"
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
+    "Foundation",
+    "Storage",
+    "Storage_Streams",
+    "System_UserProfile",
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
@@ -28,6 +32,9 @@ features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_LibraryLoader",
     "Win32_System_Power",
     "Win32_Security",

@@ -1,4 +1,5 @@
-//! Wallpaper window, frame loop and application lifecycle.
+//! Wallpaper window, frame loop and application lifecycle; the screen saver runs the same
+//! loop in its own window.
 
 use std::ffi::c_void;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -6,12 +7,13 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use windows::core::{w, Error, Result};
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, COLORREF, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT,
-    WAIT_OBJECT_0, WPARAM,
+    POINT, RECT, WAIT_OBJECT_0, WPARAM,
 };
 use windows::Win32::Globalization::{
     GetDateFormatEx, GetTimeFormatEx, DATE_LONGDATE, TIME_NOSECONDS,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     CreateMutexW, CreateWaitableTimerExW, SetWaitableTimer, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
@@ -22,13 +24,17 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    FindWindowW, GetWindowLongPtrW, GetWindowThreadProcessId, IsDialogMessageW, IsWindow,
-    MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, PostQuitMessage,
-    RegisterClassW, SendMessageW, SetLayeredWindowAttributes, SetParent, SetTimer,
-    SetWindowLongPtrW, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR,
-    MB_OK, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, WM_CLOSE, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WM_TIMER, WNDCLASSW,
-    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_VISIBLE,
+    FindWindowW, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
+    GetWindowThreadProcessId, IsDialogMessageW, IsWindow, MessageBoxW, MsgWaitForMultipleObjectsEx,
+    PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetCursor,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetParent, SetTimer, SetWindowLongPtrW,
+    TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR, MB_ICONINFORMATION,
+    MB_OK, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SM_CXSCREEN, WINDOW_EX_STYLE,
+    WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_QUIT,
+    WM_RBUTTONDOWN, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP,
+    WS_VISIBLE,
 };
 
 use crate::anim::{self, Animation};
@@ -38,6 +44,7 @@ use crate::engine::{self, save};
 use crate::grid::Grid;
 use crate::power;
 use crate::render::Renderer;
+use crate::saver::Mode;
 use crate::settings;
 use crate::shape::Shape;
 use crate::theme::{self, THEMES};
@@ -48,6 +55,8 @@ const TIMER_ID: usize = 1;
 /// tray menu) skip our pump and the waitable timer, but still dispatch WM_TIMER.
 const FALLBACK_TIMER_ID: usize = 2;
 const PAUSED_INTERVAL_MS: u32 = 1000;
+/// How often the lock screen frame is redrawn, to stay close to what's running.
+const LOCK_SCREEN_REFRESH: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Frame clock. WM_TIMER rounds to the 15.6 ms system tick; a high-resolution waitable
 /// timer (Windows 10 1803+) gives the real rate. Older systems get a normal one.
@@ -94,6 +103,7 @@ impl Drop for FrameTimer {
 }
 
 struct App {
+    mode: Mode,
     cfg: Config,
     grid: Grid,
     shapes: Vec<Shape>,
@@ -117,6 +127,13 @@ struct App {
     tray: HWND,
     /// Time and date last shown.
     clock: Option<[String; 2]>,
+    /// Show on lock screen: a redraw is wanted (something visible changed), when the last
+    /// frame was drawn, and the next frame's number (file names alternate).
+    lock_due: bool,
+    lock_drawn: Option<Instant>,
+    lock_n: u32,
+    /// Screen saver: where the mouse was first seen; moving away from it ends the show.
+    cursor_start: Option<POINT>,
 }
 
 impl App {
@@ -147,7 +164,10 @@ impl App {
         let cols = (width / cw).max(1) as usize;
         let rows = (height / ch).max(1) as usize;
         self.grid.resize(cols, rows);
-        let (fx, fy, fw, fh) = desktop::primary_in_window();
+        let (fx, fy, fw, fh) = match self.mode {
+            Mode::Preview(_) => (0.0, 0.0, width as f32, height as f32),
+            _ => desktop::primary_in_window(),
+        };
         let size = anim::Size {
             cols,
             rows,
@@ -184,7 +204,7 @@ impl App {
             let t = &THEMES[theme::index_of(&self.cfg.theme.name)];
             match Renderer::new(
                 &self.cfg.font.family,
-                font_size(&self.cfg),
+                font_size(&self.cfg, self.mode),
                 t.bg,
                 &t.cool,
                 0.0,
@@ -207,6 +227,46 @@ impl App {
         }
         if c.frame_rate {
             self.timer.set(self.interval_ms());
+        }
+        if c.lock_screen && !self.cfg.general.lock_screen && self.mode == Mode::Wallpaper {
+            crate::lockscreen::restore();
+        }
+        self.lock_due |= c.lock_screen || c.animation || c.colors || c.font || c.layout;
+    }
+
+    /// Show on lock screen: draw a fresh frame when one is due. Called once a second.
+    fn sync_lock_screen(&mut self) {
+        if !self.cfg.general.lock_screen || self.mode != Mode::Wallpaper {
+            return;
+        }
+        let stale = self
+            .lock_drawn
+            .is_none_or(|t| t.elapsed() >= LOCK_SCREEN_REFRESH);
+        if !(self.lock_due || stale) {
+            return;
+        }
+        self.lock_due = false;
+        self.lock_drawn = Some(Instant::now());
+        let Some(path) = crate::lockscreen::frame_path(self.lock_n) else {
+            return;
+        };
+        self.lock_n = self.lock_n.wrapping_add(1);
+        // Without the clock: the lock screen shows its own, and ours would go stale.
+        let mut grid = Grid::new(self.grid.cols(), self.grid.rows());
+        let mut shapes = Vec::new();
+        self.anim.set_clock(None);
+        self.anim.render(&mut grid);
+        self.anim.draw(&mut shapes);
+        self.anim.set_clock(self.clock.as_ref());
+        // The lock screen is the primary monitor's size; crop the window to it.
+        let (x, y, w, h) = desktop::primary_in_window();
+        let size = (w as u32, h as u32);
+        match self
+            .renderer
+            .render_png(&path, size, (x, y), &grid, &shapes)
+        {
+            Ok(()) => crate::lockscreen::show(path),
+            Err(e) => log!("lock screen: {e}"),
         }
     }
 
@@ -284,21 +344,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     && app_of(hwnd).is_some_and(|a| a.pump_stalled())) =>
         {
             if let Some(app) = app_of(hwnd) {
+                let wallpaper = app.mode == Mode::Wallpaper;
                 // Explorer restarted: re-attach.
-                if !IsWindow(Some(app.parent)).as_bool() {
+                if wallpaper && !IsWindow(Some(app.parent)).as_bool() {
                     if let Ok(parent) = desktop::find_wallpaper_parent() {
                         app.parent = parent;
                         let _ = SetParent(hwnd, Some(parent));
                         on_display_change(hwnd, app);
                     }
                 }
-                // Once a second: config edits, then auto-pause.
-                let reloaded =
-                    app.last_power_check.elapsed().as_secs() >= 1 && app.reload_if_changed();
+                // Once a second: config edits, then auto-pause. The screen saver skips
+                // these: it is the fullscreen app, and it only runs for a while.
+                let second = wallpaper && app.last_power_check.elapsed().as_secs() >= 1;
+                let reloaded = second && app.reload_if_changed();
                 if reloaded {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                let changed = app.refresh_pause() || reloaded;
+                let changed = (second && app.refresh_pause()) || reloaded;
+                if second {
+                    app.sync_lock_screen();
+                }
                 if changed {
                     app.last_frame = Instant::now();
                     app.timer.set(app.interval_ms());
@@ -332,9 +397,36 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_ERASEBKGND => LRESULT(1), // we paint every pixel
         WM_DISPLAYCHANGE => {
-            if let Some(app) = app_of(hwnd) {
+            if let Some(app) = app_of(hwnd).filter(|a| a.mode == Mode::Wallpaper) {
                 on_display_change(hwnd, app);
             }
+            LRESULT(0)
+        }
+        // Screen saver: no cursor, and any input ends it.
+        WM_SETCURSOR if app_of(hwnd).is_some_and(|a| a.mode == Mode::Saver) => {
+            SetCursor(None);
+            LRESULT(1)
+        }
+        WM_MOUSEMOVE if app_of(hwnd).is_some_and(|a| a.mode == Mode::Saver) => {
+            let app = app_of(hwnd).unwrap();
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            // Windows sends a move when the window appears; a nudge of a few px is ignored.
+            let start = *app.cursor_start.get_or_insert(pt);
+            if (pt.x - start.x).abs() > 4 || (pt.y - start.y).abs() > 4 {
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
+            LRESULT(0)
+        }
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN
+        | WM_XBUTTONDOWN | WM_MOUSEWHEEL
+            if app_of(hwnd).is_some_and(|a| a.mode == Mode::Saver) =>
+        {
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            LRESULT(0)
+        }
+        WM_ACTIVATEAPP if wp.0 == 0 && app_of(hwnd).is_some_and(|a| a.mode == Mode::Saver) => {
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             LRESULT(0)
         }
         tray::WM_GET_STATE => match app_of(hwnd) {
@@ -352,6 +444,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.apply_colors();
                 app.timer.set(app.interval_ms()); // frame rate may differ
                 save("general", "animation", name);
+                app.lock_due = true;
                 let _ = InvalidateRect(Some(hwnd), None, false);
                 refresh_settings();
             }
@@ -362,6 +455,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.cfg.theme.name = t.name.into();
                 app.apply_colors();
                 save("theme", "name", t.name);
+                app.lock_due = true;
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
             LRESULT(0)
@@ -371,7 +465,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let (id, commit) = (wp.0 & 0xFF, (wp.0 >> 8) & 1 == 1);
                 app.tweak(id, lp.0 as f32 / 1000.0, commit);
                 let _ = InvalidateRect(Some(hwnd), None, false);
-                if id == settings::CLOCK {
+                if id == settings::CLOCK || id == settings::LOCK_SCREEN {
                     refresh_settings(); // toggled from the tray
                 }
             }
@@ -409,30 +503,48 @@ fn font_px(size: i32) -> i32 {
     (size as f32 * dpi as f32 / 96.0).round() as i32
 }
 
-/// The renderer's font size: DPI-scaled, times the overall scale.
-fn font_size(cfg: &Config) -> i32 {
-    (font_px(cfg.font.size) as f32 * cfg.general.scale)
-        .round()
-        .max(4.0) as i32
+/// The renderer's font size: DPI-scaled, times the overall scale. The preview is a
+/// miniature of the screen.
+fn font_size(cfg: &Config, mode: Mode) -> i32 {
+    let mut px = font_px(cfg.font.size) as f32 * cfg.general.scale;
+    if let Mode::Preview(window) = mode {
+        let mut r = RECT::default();
+        // SAFETY: plain queries; a bad handle leaves `r` empty.
+        let screen = unsafe {
+            let _ = GetClientRect(window, &mut r);
+            GetSystemMetrics(SM_CXSCREEN).max(1)
+        };
+        px *= r.right as f32 / screen as f32;
+    }
+    px.round().max(4.0) as i32
 }
 
 unsafe fn on_display_change(hwnd: HWND, app: &App) {
     desktop::place(hwnd, app.parent);
 }
 
-pub fn run() -> Result<()> {
-    // SAFETY: once, before any window exists.
+pub fn run(mode: Mode) -> Result<()> {
+    // SAFETY: once, before any window exists. COM is for WIC (lock screen frames).
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
 
-    config::migrate();
-    if !first_instance() {
+    if mode == Mode::Configure {
+        configure();
         return Ok(());
     }
-    crate::log::init();
-    crate::autostart::migrate();
-    let first_run = config::create_if_missing();
+    // The screen saver only reads the settings, and may run beside the wallpaper.
+    let first_run = mode == Mode::Wallpaper && {
+        config::migrate();
+        if !first_instance() {
+            return Ok(());
+        }
+        crate::log::init();
+        crate::autostart::migrate();
+        crate::saver::refresh_installed();
+        config::create_if_missing()
+    };
     let (cfg, warnings) = config::load();
     for w in &warnings {
         log!("config: {w}");
@@ -442,7 +554,7 @@ pub fn run() -> Result<()> {
     let t = &THEMES[theme::index_of(&cfg.theme.name)];
     let renderer = Renderer::new(
         &cfg.font.family,
-        font_size(&cfg),
+        font_size(&cfg, mode),
         t.bg,
         if anim.warm() { &t.warm } else { &t.cool },
         cfg.theme.glass,
@@ -455,9 +567,14 @@ pub fn run() -> Result<()> {
     // SAFETY: Win32 window creation; `app_ptr` is reclaimed after the message loop, when no
     // more wndproc calls can happen.
     unsafe {
-        let parent = desktop::find_wallpaper_parent()?;
+        let parent = match mode {
+            Mode::Preview(window) => window,
+            Mode::Wallpaper => desktop::find_wallpaper_parent()?,
+            _ => HWND::default(),
+        };
         let now = Instant::now();
         let app_ptr = Box::into_raw(Box::new(App {
+            mode,
             cfg,
             grid: Grid::new(1, 1),
             shapes: Vec::new(),
@@ -476,6 +593,10 @@ pub fn run() -> Result<()> {
             auto_paused: None,
             tray: HWND::default(),
             clock: None,
+            lock_due: false,
+            lock_drawn: None,
+            lock_n: 0,
+            cursor_start: None,
         }));
 
         let result = (|| -> Result<()> {
@@ -491,28 +612,52 @@ pub fn run() -> Result<()> {
                 return Err(Error::from_thread());
             }
 
-            let (x, y, w, h) = desktop::rect_in_parent(parent);
-            let hwnd = CreateWindowExW(
+            let (ex_style, style, (x, y, w, h)) = match mode {
+                Mode::Saver => {
+                    let r = desktop::virtual_screen();
+                    let rect = (r.left, r.top, r.right - r.left, r.bottom - r.top);
+                    (WS_EX_TOPMOST, WS_POPUP | WS_VISIBLE, rect)
+                }
+                Mode::Preview(_) => {
+                    let mut r = RECT::default();
+                    GetClientRect(parent, &mut r)?;
+                    (
+                        WINDOW_EX_STYLE(0),
+                        WS_CHILD | WS_VISIBLE,
+                        (0, 0, r.right, r.bottom),
+                    )
+                }
                 // Layered: required under a WS_EX_NOREDIRECTIONBITMAP Progman.
-                WS_EX_NOACTIVATE | WS_EX_LAYERED,
+                _ => (
+                    WS_EX_NOACTIVATE | WS_EX_LAYERED,
+                    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                    desktop::rect_in_parent(parent),
+                ),
+            };
+            let hwnd = CreateWindowExW(
+                ex_style,
                 class,
                 w!("Glyphdrift"),
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                style,
                 x,
                 y,
                 w,
                 h,
-                Some(parent),
+                (!parent.is_invalid()).then_some(parent),
                 None,
                 Some(hinst.into()),
                 Some(app_ptr as *const c_void),
             )?;
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
-            desktop::place(hwnd, parent);
-
-            let tray = tray::create(hwnd)?;
-            (*app_ptr).tray = tray;
-            (*app_ptr).update_tray();
+            if mode == Mode::Wallpaper {
+                SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+                desktop::place(hwnd, parent);
+                let tray = tray::create(hwnd)?;
+                (*app_ptr).tray = tray;
+                (*app_ptr).update_tray();
+            } else if mode == Mode::Saver {
+                let _ = SetForegroundWindow(hwnd); // for the keyboard
+            }
+            let tray = (*app_ptr).tray;
             if first_run {
                 // Show new users where the controls are.
                 tray::notify(
@@ -553,7 +698,9 @@ pub fn run() -> Result<()> {
                     DispatchMessageW(&msg);
                 }
             }
-            tray::destroy(tray);
+            if !tray.is_invalid() {
+                tray::destroy(tray);
+            }
             Ok(())
         })();
 
@@ -568,6 +715,22 @@ fn refresh_settings() {
     if !window.is_invalid() {
         // SAFETY: plain message post; a stale handle just fails.
         let _ = unsafe { PostMessageW(Some(window), settings::WM_REFRESH, WPARAM(0), LPARAM(0)) };
+    }
+}
+
+/// The screen saver's Settings button: the screen saver shows the wallpaper's animation and
+/// theme, so open the wallpaper's settings, or say where they are.
+fn configure() {
+    if first_instance() {
+        // SAFETY: constant strings.
+        unsafe {
+            MessageBoxW(
+                None,
+                w!("The screen saver shows the animation and theme you pick in Glyphdrift. Start Glyphdrift and click its tray icon to change them."),
+                w!("Glyphdrift"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
     }
 }
 

@@ -24,7 +24,7 @@ pub struct Changed {
     pub frame: bool,
     /// macOS: Match menu bar to theme was turned on or off.
     pub menu_bar: bool,
-    /// macOS: Show on lock screen was turned on or off.
+    /// Show on lock screen was turned on or off.
     pub lock_screen: bool,
 }
 
@@ -38,6 +38,7 @@ pub fn tweak_value(cfg: &Config, id: usize) -> f32 {
         ui::SCALE => g.scale,
         ui::OBJECT_SCALE => g.object_scale,
         ui::CLOCK => f32::from(u8::from(g.clock)),
+        ui::LOCK_SCREEN => f32::from(u8::from(g.lock_screen)),
         _ => 0.0,
     }
 }
@@ -92,6 +93,13 @@ pub fn tweak(cfg: &mut Config, id: usize, value: f32, commit: bool) -> Changed {
             changed.frame = true;
             if commit {
                 save("general", "clock", cfg.general.clock);
+            }
+        }
+        ui::LOCK_SCREEN => {
+            cfg.general.lock_screen = value > 0.5;
+            changed.lock_screen = true;
+            if commit {
+                save("general", "lock_screen", cfg.general.lock_screen);
             }
         }
         _ => {}

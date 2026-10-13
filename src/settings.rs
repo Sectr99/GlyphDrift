@@ -1,4 +1,4 @@
-//! Settings window: animation, theme swatches, live sliders and the clock toggle. Standard
+//! Settings window: animation, theme swatches, live sliders and the clock and lock screen toggles. Standard
 //! Win32 controls; changes apply live and save on release, sent as messages like the tray.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
@@ -41,7 +41,7 @@ use crate::anim::ANIMATIONS;
 use crate::theme::{gradient, THEMES};
 use crate::tray::{unpack_state, WM_GET_STATE, WM_SET_ANIMATION, WM_SET_THEME};
 use crate::ui::*;
-pub use crate::ui::{CLOCK, FPS, GLASS, OBJECT_SCALE, SCALE, SPEED};
+pub use crate::ui::{CLOCK, FPS, GLASS, LOCK_SCREEN, OBJECT_SCALE, SCALE, SPEED};
 
 /// To the wallpaper: WPARAM = tweak id | commit << 8 (save too), LPARAM = value * 1000.
 pub const WM_TWEAK: u32 = WM_APP + 9;
@@ -56,6 +56,8 @@ const ID_RESET: usize = 102;
 const ID_CLOCK: usize = 103;
 const ID_CLOCK_LABEL: usize = 104;
 const ID_FPS: usize = 105;
+const ID_LOCK: usize = 106;
+const ID_LOCK_LABEL: usize = 107;
 const SS_NOTIFY: u32 = 0x100;
 const ID_CLOSE: usize = 2; // IDCANCEL, so Esc closes
 const ID_SLIDER: usize = 200; // + tweak id
@@ -232,7 +234,7 @@ fn client_height() -> i32 {
         + 14
         + SLIDERS.len() as i32 * 36
         + 36
-        + 28
+        + 2 * 28
         + 8
         + 28
         + M
@@ -446,6 +448,21 @@ unsafe fn build(hwnd: HWND) {
         (M + 20, y + 3, full - 20, LABEL_H),
         ID_CLOCK_LABEL,
     );
+    y += 28;
+    control(
+        w!("BUTTON"),
+        "Show on lock screen",
+        WINDOW_STYLE(BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
+        (M, y, 14, 24),
+        ID_LOCK,
+    );
+    control(
+        w!("STATIC"),
+        "Show on lock screen",
+        WINDOW_STYLE(SS_NOTIFY),
+        (M + 20, y + 3, full - 20, LABEL_H),
+        ID_LOCK_LABEL,
+    );
     y += 28 + 8;
     control(
         w!("BUTTON"),
@@ -505,6 +522,8 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
         (ID_FPS, FPS),
         (ID_CLOCK, CLOCK),
         (ID_CLOCK_LABEL, CLOCK),
+        (ID_LOCK, LOCK_SCREEN),
+        (ID_LOCK_LABEL, LOCK_SCREEN),
     ]);
     for (control, setting) in tools {
         let Ok(child) = GetDlgItem(Some(hwnd), control as i32) else {
@@ -560,13 +579,14 @@ unsafe fn load(hwnd: HWND) {
         Some(WPARAM(frame_rate_index(get_tweak(FPS)))),
         Some(LPARAM(0)),
     );
-    let clock = get_tweak(CLOCK) != 0.0;
-    SendMessageW(
-        GetDlgItem(Some(hwnd), ID_CLOCK as i32).unwrap_or_default(),
-        BM_SETCHECK,
-        Some(WPARAM(usize::from(clock))),
-        Some(LPARAM(0)),
-    );
+    for (box_id, setting) in [(ID_CLOCK, CLOCK), (ID_LOCK, LOCK_SCREEN)] {
+        SendMessageW(
+            GetDlgItem(Some(hwnd), box_id as i32).unwrap_or_default(),
+            BM_SETCHECK,
+            Some(WPARAM(usize::from(get_tweak(setting) != 0.0))),
+            Some(LPARAM(0)),
+        );
+    }
 }
 
 fn get_tweak(id: usize) -> f32 {
@@ -885,12 +905,18 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                             PostMessageW(Some(target()), WM_SET_THEME, WPARAM(theme), LPARAM(0));
                     }
                 }
-                ID_CLOCK | ID_CLOCK_LABEL if code == 0 && !label_inactive(hwnd, ID_CLOCK_LABEL) => {
+                ID_CLOCK | ID_CLOCK_LABEL | ID_LOCK | ID_LOCK_LABEL
+                    if code == 0 && !label_inactive(hwnd, id) =>
+                {
                     // BN_CLICKED / STN_CLICKED; a label click toggles the box.
-                    let check = GetDlgItem(Some(hwnd), ID_CLOCK as i32).unwrap_or_default();
+                    let (box_id, setting) = match id {
+                        ID_CLOCK | ID_CLOCK_LABEL => (ID_CLOCK, CLOCK),
+                        _ => (ID_LOCK, LOCK_SCREEN),
+                    };
+                    let check = GetDlgItem(Some(hwnd), box_id as i32).unwrap_or_default();
                     let mut on =
                         SendMessageW(check, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 != 0;
-                    if id == ID_CLOCK_LABEL {
+                    if id != box_id {
                         on = !on;
                         SendMessageW(
                             check,
@@ -899,7 +925,7 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                             Some(LPARAM(0)),
                         );
                     }
-                    tweak(CLOCK, f32::from(u8::from(on)), true);
+                    tweak(setting, f32::from(u8::from(on)), true);
                 }
                 ID_RESET => {
                     SendMessageW(

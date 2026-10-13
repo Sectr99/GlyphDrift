@@ -73,6 +73,15 @@ pub fn virtual_screen() -> RECT {
     }
 }
 
+/// What the window's size and focus depend on: the virtual screen and the primary
+/// monitor's size. A change means monitors were added, removed, resized or rearranged.
+pub fn layout() -> [i32; 6] {
+    let v = virtual_screen();
+    // SAFETY: no preconditions.
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    [v.left, v.top, v.right, v.bottom, w, h]
+}
+
 /// The primary monitor (x, y, w, h) in window pixels. The window spans the virtual
 /// screen, whose origin may be negative; the primary starts at screen (0, 0).
 pub fn primary_in_window() -> (f32, f32, f32, f32) {

@@ -30,11 +30,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, SetLayeredWindowAttributes, SetParent, SetTimer, SetWindowLongPtrW,
     TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, LWA_ALPHA, MB_ICONERROR, MB_ICONINFORMATION,
     MB_OK, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SM_CXSCREEN, WINDOW_EX_STYLE,
-    WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_QUIT,
-    WM_RBUTTONDOWN, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
-    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP,
-    WS_VISIBLE,
+    WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN,
+    WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_CHILD,
+    WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::anim::{self, Animation};
@@ -132,6 +131,8 @@ struct App {
     lock_due: bool,
     lock_drawn: Option<Instant>,
     lock_n: u32,
+    /// Monitor layout the window was last fitted to (`desktop::layout`).
+    layout: [i32; 6],
     /// Screen saver: where the mouse was first seen; moving away from it ends the show.
     cursor_start: Option<POINT>,
 }
@@ -362,6 +363,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 let changed = (second && app.refresh_pause()) || reloaded;
                 if second {
+                    // Monitors changed (resolution, a split screen, one added or removed).
+                    // WM_DISPLAYCHANGE goes to top-level windows only, and Explorer resizes
+                    // our parent around then, so this check catches it reliably.
+                    if app.layout != desktop::layout() {
+                        on_display_change(hwnd, app);
+                    }
                     app.sync_lock_screen();
                 }
                 if changed {
@@ -396,12 +403,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1), // we paint every pixel
-        WM_DISPLAYCHANGE => {
-            if let Some(app) = app_of(hwnd).filter(|a| a.mode == Mode::Wallpaper) {
-                on_display_change(hwnd, app);
-            }
-            LRESULT(0)
-        }
         // Screen saver: no cursor, and any input ends it.
         WM_SETCURSOR if app_of(hwnd).is_some_and(|a| a.mode == Mode::Saver) => {
             SetCursor(None);
@@ -519,8 +520,14 @@ fn font_size(cfg: &Config, mode: Mode) -> i32 {
     px.round().max(4.0) as i32
 }
 
-unsafe fn on_display_change(hwnd: HWND, app: &App) {
+/// Fit the window to the monitors again, and restart the animation for the new layout
+/// (WM_SIZE does it too, but not when only the primary monitor changed).
+unsafe fn on_display_change(hwnd: HWND, app: &mut App) {
+    app.layout = desktop::layout();
+    log!("display: refit to {:?}", app.layout);
     desktop::place(hwnd, app.parent);
+    app.resize(app.width, app.height);
+    app.lock_due = true;
 }
 
 pub fn run(mode: Mode) -> Result<()> {
@@ -596,6 +603,7 @@ pub fn run(mode: Mode) -> Result<()> {
             lock_due: false,
             lock_drawn: None,
             lock_n: 0,
+            layout: desktop::layout(),
             cursor_start: None,
         }));
 

@@ -273,27 +273,6 @@ fn settings_dir() -> Option<std::path::PathBuf> {
     Some(home.join("Library").join("Application Support"))
 }
 
-/// Older settings folder names, newest first.
-const LEGACY_DIRS: [&str; 2] = ["WallMotion", "ascii-wallpaper"];
-
-/// Move an older settings folder into place, if there is no current one.
-pub fn migrate() {
-    let Some(base) = settings_dir() else {
-        return;
-    };
-    let new = base.join("Glyphdrift");
-    if new.exists() {
-        return;
-    }
-    if let Some(old) = LEGACY_DIRS
-        .iter()
-        .map(|d| base.join(d))
-        .find(|d| d.is_dir())
-    {
-        let _ = std::fs::rename(old, new);
-    }
-}
-
 /// Config file mtime, for hot reload.
 pub fn modified() -> Option<std::time::SystemTime> {
     std::fs::metadata(default_path()?).ok()?.modified().ok()

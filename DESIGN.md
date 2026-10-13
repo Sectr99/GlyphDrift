@@ -116,7 +116,6 @@ A named mutex keeps one instance; a second launch opens the first one's settings
 - `%APPDATA%\Glyphdrift\config.toml`, edited with `toml_edit` so hand-written comments survive.
 - Invalid values are clamped or defaulted with a logged warning, never a failed start.
 - The file is created on first launch, which also marks the first-run notification as shown.
-- Startup migrates the settings folder and Run entry from the earlier names (WallMotion, ascii-wallpaper).
 
 ## Security
 

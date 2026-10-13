@@ -49,7 +49,7 @@ The core (`anim`, `grid`, `config`, `theme`, `icon`, `shape`, `ui`, `engine`) is
 - **Windows 11 24H2+:** Progman hosts the icons and has `WS_EX_NOREDIRECTIONBITMAP`, so only layered children render. The wallpaper is a layered child of Progman, kept directly below the icon view. This needs the manifest's Windows 10 `supportedOS` entry.
 - **Windows 10 and earlier 11:** the WorkerW that follows the one hosting the icons.
 
-The window spans the virtual screen. Explorer restarts are detected (parent gone) and re-attached; the tray icon is re-added on `TaskbarCreated`.
+The window spans the virtual screen. `WM_DISPLAYCHANGE` only reaches top-level windows, and Explorer resizes our parent around then, so the once-a-second check compares `desktop::layout()` (virtual screen and primary size) with the last fit and refits on any change: resolution, a monitor added, removed or split. Explorer restarts are detected (parent gone) and re-attached; the tray icon is re-added on `TaskbarCreated`.
 
 ## Frame loop
 

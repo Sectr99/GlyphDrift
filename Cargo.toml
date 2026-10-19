@@ -15,7 +15,7 @@ toml_edit = { version = "0.25", features = ["serde"] }
 
 # Direct2D's point type (Vector2); already in the tree via windows, which doesn't re-export it.
 [target.'cfg(windows)'.dependencies.windows-numerics]
-version = "0.3"
+version = "0.100"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"

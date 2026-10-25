@@ -2,6 +2,7 @@
 //! loop in its own window.
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::{w, Error, Result};
@@ -568,6 +569,7 @@ pub fn run(mode: Mode) -> Result<()> {
             return Ok(());
         }
         crate::log::init();
+        crate::update::clean_up();
         crate::saver::refresh_installed();
         config::create_if_missing()
     };
@@ -732,9 +734,21 @@ pub fn run(mode: Mode) -> Result<()> {
         })();
 
         drop(Box::from_raw(app_ptr));
+        // An installed update: hand over now that this copy has stopped, so the new exe
+        // starts as the only one.
+        if let Some(path) = crate::update::take_restart() {
+            let _ = CloseHandle(HANDLE(INSTANCE.load(Ordering::Relaxed) as *mut _));
+            match crate::update::restart(&path) {
+                Ok(()) => log!("update: started {}", path.display()),
+                Err(e) => log!("update: {e}"),
+            }
+        }
         result
     }
 }
+
+/// The single-instance mutex, once this is the first copy.
+static INSTANCE: AtomicIsize = AtomicIsize::new(0);
 
 /// The screen saver's Settings button: the screen saver shows the wallpaper's animation and
 /// theme, so open the wallpaper's settings, or say where they are.
@@ -754,10 +768,12 @@ fn configure() {
 
 /// True for the first running copy; a second launch opens the first one's settings.
 fn first_instance() -> bool {
-    // SAFETY: constant strings. The mutex is never closed: it marks the process running.
+    // SAFETY: constant strings. The mutex stays open while the process runs, marking it
+    // running; only a handover to an update closes it early.
     unsafe {
         let mutex = CreateMutexW(None, false, w!("Local\\Glyphdrift"));
-        if mutex.is_ok() && GetLastError() != ERROR_ALREADY_EXISTS {
+        if let (Ok(mutex), false) = (mutex, GetLastError() == ERROR_ALREADY_EXISTS) {
+            INSTANCE.store(mutex.0 as isize, Ordering::Relaxed);
             return true;
         }
         if let Ok(tray) = FindWindowW(w!("GlyphdriftTray"), None) {

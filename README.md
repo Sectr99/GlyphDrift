@@ -4,7 +4,7 @@ A live wallpaper for Windows 10/11 and macOS 12+: contour maps, ASCII art and ge
 
 **[glyphdrift.com](https://glyphdrift.com)** · **[Download the latest release](https://github.com/Sectr99/GlyphDrift/releases/latest)**
 
-- Small: one portable exe (about 1 MB) on Windows and a universal app (about 1.4 MB zipped) on macOS. No installer, no admin rights, and it only goes online when you ask it to check for updates.
+- Small: one portable exe (about 1 MB) on Windows and a universal app (about 1.4 MB zipped) on macOS. No installer, no admin rights, and it only goes online when you ask it to check for or install an update.
 - 23 animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour).
 - 22 themes: Matrix, Mono, Amber CRT; Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Everforest, Monokai, Ayu Dark, Night Owl, Palenight, GitHub Dark, Oxocarbon, Poimandres; Synthwave '84, Claude.
 - Also as a screen saver, and as a still frame on the lock screen.
@@ -33,7 +33,7 @@ Hover over any setting for a short explanation. Controls that don't apply to the
 | Show on lock screen | Toggle the lock screen frame |
 | Install screen saver… | Install Glyphdrift as your screen saver (see below) |
 | Start with Windows | Run at sign-in (also listed in Settings > Apps > Startup) |
-| Check for updates… | Ask GitHub whether a newer release is out; the notification links to the download. Glyphdrift never checks on its own |
+| Check for updates… | Ask GitHub whether a newer release is out. If one is, click the notification to update: Glyphdrift downloads the new `glyphdrift.exe` from the release, checks it against the release's SHA-256 checksum, replaces itself and restarts, keeping your settings. Glyphdrift never checks or updates on its own |
 | Pause / Resume | Stop or restart the animation. While paused (by you, a locked screen, the display turning off, a fullscreen app or battery saver) the icon turns grey and its hover text says why |
 | Quit | Exit and restore the normal wallpaper |
 

@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, CREATESTRUCTW, GWLP_USERDATA, HICON,
     HMENU, IDI_APPLICATION, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
     SM_CXSMICON, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE,
-    WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
+    WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
 };
 
 /// To the wallpaper: Pause/Resume.
@@ -43,6 +43,8 @@ const ID_SAVER: usize = 7;
 const ID_UPDATE: usize = 8;
 /// From the update check's thread: LPARAM = a `Box<update::Outcome>`.
 const WM_UPDATE_CHECKED: u32 = WM_APP + 14;
+/// From the update install's thread: LPARAM = a `Box<Result<PathBuf, String>>`.
+const WM_UPDATE_INSTALLED: u32 = WM_APP + 15;
 const ID_ANIM_BASE: usize = 100;
 const ID_THEME_BASE: usize = 200;
 const _: () = assert!(ID_ANIM_BASE + crate::anim::ANIMATIONS.len() <= ID_THEME_BASE);
@@ -92,10 +94,23 @@ static TIP: Mutex<String> = Mutex::new(String::new());
 static PAUSED: AtomicBool = AtomicBool::new(false);
 /// Paused from the menu (it then offers Resume), not automatically.
 static USER_PAUSED: AtomicBool = AtomicBool::new(false);
-/// An update check is running.
-static CHECKING: AtomicBool = AtomicBool::new(false);
-/// The last notification announced an update: clicking it opens the download page.
-static CLICK_DOWNLOADS: AtomicBool = AtomicBool::new(false);
+/// An update check or install is running.
+static UPDATING: AtomicBool = AtomicBool::new(false);
+
+/// What clicking the last notification does.
+enum Click {
+    Settings,
+    /// Install this release (a tag).
+    Install(String),
+    Downloads,
+}
+static CLICK: Mutex<Click> = Mutex::new(Click::Settings);
+
+fn set_click(click: Click) {
+    if let Ok(mut c) = CLICK.lock() {
+        *c = click;
+    }
+}
 
 /// White like the stock icons; grey while paused.
 const ICON_RGB: (u8, u8, u8) = (0xff, 0xff, 0xff);
@@ -208,10 +223,10 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     nid
 }
 
-/// One-off notification (a toast); clicking it opens settings, or the download page after
-/// `update_checked` found an update.
+/// One-off notification (a toast); clicking it opens settings, unless `set_click` says
+/// otherwise afterwards.
 pub fn notify(tray: HWND, title: &str, text: &str) {
-    CLICK_DOWNLOADS.store(false, Ordering::Relaxed);
+    set_click(Click::Settings);
     // SAFETY: `tray` is the window from `create`; the struct outlives the call.
     unsafe {
         let mut nid = icon_data(tray);
@@ -229,39 +244,89 @@ pub fn notify(tray: HWND, title: &str, text: &str) {
     }
 }
 
-/// Start an update check unless one is running; `update_checked` gets the outcome.
-fn check_for_updates(tray: HWND) {
-    if CHECKING.swap(true, Ordering::Relaxed) {
-        return;
-    }
+/// A callback for a background thread that posts `value` to the tray as `msg`, boxed in
+/// LPARAM; the handler reclaims it.
+fn post_to(tray: HWND, msg: u32) -> impl FnOnce(Box<dyn std::any::Any + Send>) {
     let tray = tray.0 as isize; // HWND isn't Send
-    crate::update::check_in_background(move |outcome| {
-        let outcome = Box::into_raw(Box::new(outcome));
+    move |value| {
+        let value = Box::into_raw(Box::new(value));
         // SAFETY: plain post; the tray reclaims the box. If it's gone, the box leaks.
         unsafe {
             let _ = PostMessageW(
                 Some(HWND(tray as *mut _)),
-                WM_UPDATE_CHECKED,
+                msg,
                 WPARAM(0),
-                LPARAM(outcome as isize),
+                LPARAM(value as isize),
             );
         }
-    });
+    }
+}
+
+/// The value `post_to` boxed into `lp`.
+///
+/// SAFETY: `lp` came from `post_to`, and this runs once per message.
+unsafe fn take<T: 'static>(lp: LPARAM) -> Option<T> {
+    let value = *Box::from_raw(lp.0 as *mut Box<dyn std::any::Any + Send>);
+    value.downcast().ok().map(|v| *v)
+}
+
+/// Start an update check unless an update is in progress; `update_checked` gets the outcome.
+fn check_for_updates(tray: HWND) {
+    if UPDATING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let post = post_to(tray, WM_UPDATE_CHECKED);
+    crate::update::check_in_background(move |outcome| post(Box::new(outcome)));
+}
+
+/// Download and install release `tag`; `update_installed` gets the result.
+fn install_update(tray: HWND, tag: String) {
+    if UPDATING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    notify(tray, "Updating Glyphdrift", &format!("Downloading {tag}…"));
+    let post = post_to(tray, WM_UPDATE_INSTALLED);
+    crate::update::install_in_background(tag, move |result| post(Box::new(result)));
+}
+
+/// Quit, for the installed update to start in this copy's place, or say why it failed.
+fn update_installed(tray: HWND, result: std::result::Result<std::path::PathBuf, String>) {
+    UPDATING.store(false, Ordering::Relaxed);
+    match result {
+        Ok(path) => {
+            log!("update: installed, restarting");
+            crate::update::restart_after_exit(path);
+            // SAFETY: GWLP_USERDATA holds the wallpaper window; Quit does the same.
+            unsafe {
+                let wallpaper = HWND(GetWindowLongPtrW(tray, GWLP_USERDATA) as *mut _);
+                let _ = PostMessageW(Some(wallpaper), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
+        }
+        Err(e) => {
+            log!("update: {e}");
+            notify(
+                tray,
+                "Couldn't update Glyphdrift",
+                &format!("{e}. Click here to download it instead."),
+            );
+            set_click(Click::Downloads);
+        }
+    }
 }
 
 /// Say what an update check found.
 fn update_checked(tray: HWND, outcome: crate::update::Outcome) {
     use crate::update::Outcome;
-    CHECKING.store(false, Ordering::Relaxed);
+    UPDATING.store(false, Ordering::Relaxed);
     let current = env!("CARGO_PKG_VERSION");
     match outcome {
         Outcome::Newer(tag) => {
             notify(
                 tray,
                 &format!("Glyphdrift {tag} is available"),
-                &format!("You have {current}. Click here to download the new version."),
+                &format!("You have {current}. Click here to update; Glyphdrift restarts on {tag}."),
             );
-            CLICK_DOWNLOADS.store(true, Ordering::Relaxed);
+            set_click(Click::Install(tag));
         }
         Outcome::Current => notify(
             tray,
@@ -336,21 +401,40 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
             LRESULT(0)
         }
-        WM_TRAY
-            if lp.0 as u32 == NIN_BALLOONUSERCLICK
-                && CLICK_DOWNLOADS.swap(false, Ordering::Relaxed) =>
-        {
-            open_downloads();
+        WM_TRAY if lp.0 as u32 == NIN_BALLOONUSERCLICK => {
+            let click = CLICK
+                .lock()
+                .map(|mut c| std::mem::replace(&mut *c, Click::Settings));
+            match click.unwrap_or(Click::Settings) {
+                Click::Install(tag) => install_update(hwnd, tag),
+                Click::Downloads => open_downloads(),
+                Click::Settings => {
+                    crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _))
+                }
+            }
             LRESULT(0)
         }
-        WM_TRAY if lp.0 as u32 == WM_LBUTTONUP || lp.0 as u32 == NIN_BALLOONUSERCLICK => {
+        WM_TRAY if lp.0 as u32 == WM_LBUTTONUP => {
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
             LRESULT(0)
         }
         WM_UPDATE_CHECKED => {
-            // SAFETY: posted by `check_for_updates` with a leaked Box<Outcome>, received once.
-            let outcome = *Box::from_raw(lp.0 as *mut crate::update::Outcome);
-            update_checked(hwnd, outcome);
+            // SAFETY: posted through `post_to`, received once.
+            if let Some(outcome) = take(lp) {
+                update_checked(hwnd, outcome);
+            }
+            LRESULT(0)
+        }
+        WM_UPDATE_INSTALLED => {
+            // SAFETY: posted through `post_to`, received once.
+            if let Some(result) = take(lp) {
+                update_installed(hwnd, result);
+            }
+            LRESULT(0)
+        }
+        // Menu commands: from the menu below, or posted.
+        WM_COMMAND => {
+            command(hwnd, wp.0 & 0xFFFF);
             LRESULT(0)
         }
         WM_TRAY if lp.0 as u32 == WM_RBUTTONUP => {
@@ -369,17 +453,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 if let Some(sub) = radio_submenu(themes, ID_THEME_BASE, theme_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Theme"));
                 }
-                let on = |setting: usize| {
-                    SendMessageW(
-                        target,
-                        crate::settings::WM_GET_TWEAK,
-                        Some(WPARAM(setting)),
-                        Some(LPARAM(0)),
-                    )
-                    .0 != 0
-                };
-                let clock = on(crate::ui::CLOCK);
-                let lock = on(crate::ui::LOCK_SCREEN);
+                let clock = setting_on(target, crate::ui::CLOCK);
+                let lock = setting_on(target, crate::ui::LOCK_SCREEN);
                 for (id, checked, label) in [
                     (ID_CLOCK, clock, w!("Show clock")),
                     (ID_LOCK, lock, w!("Show on lock screen")),
@@ -421,58 +496,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     None,
                 );
                 let _ = DestroyMenu(menu); // and its submenus
-                match cmd.0 as usize {
-                    ID_PAUSE => {
-                        let _ = PostMessageW(Some(target), WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
-                    }
-                    ID_SETTINGS => crate::settings::open(target),
-                    ID_CLOCK | ID_LOCK => {
-                        // Toggle and save (value 0 or 1000).
-                        let (setting, on) = if cmd.0 as usize == ID_CLOCK {
-                            (crate::ui::CLOCK, clock)
-                        } else {
-                            (crate::ui::LOCK_SCREEN, lock)
-                        };
-                        let _ = PostMessageW(
-                            Some(target),
-                            crate::settings::WM_TWEAK,
-                            WPARAM(setting | 1 << 8),
-                            LPARAM(if on { 0 } else { 1000 }),
-                        );
-                    }
-                    ID_UPDATE => check_for_updates(hwnd),
-                    ID_SAVER => {
-                        if let Err(e) = crate::saver::install() {
-                            failed(hwnd, "Couldn't install the screen saver", &e);
-                        }
-                    }
-                    ID_AUTOSTART => {
-                        if let Err(e) = crate::autostart::set(!autostart) {
-                            failed(hwnd, "Couldn't change Start with Windows", &e);
-                        }
-                        crate::settings::refresh();
-                    }
-                    ID_QUIT => {
-                        let _ = PostMessageW(Some(target), WM_CLOSE, WPARAM(0), LPARAM(0));
-                    }
-                    id if id >= ID_THEME_BASE => {
-                        let _ = PostMessageW(
-                            Some(target),
-                            WM_SET_THEME,
-                            WPARAM(id - ID_THEME_BASE),
-                            LPARAM(0),
-                        );
-                    }
-                    id if id >= ID_ANIM_BASE => {
-                        let _ = PostMessageW(
-                            Some(target),
-                            WM_SET_ANIMATION,
-                            WPARAM(id - ID_ANIM_BASE),
-                            LPARAM(0),
-                        );
-                    }
-                    _ => {}
-                }
+                command(hwnd, cmd.0 as usize);
             }
             LRESULT(0)
         }
@@ -484,5 +508,80 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
+}
+
+/// Is setting `id` (a 0/1 toggle) on in the wallpaper?
+fn setting_on(target: HWND, id: usize) -> bool {
+    // SAFETY: plain message send.
+    let value = unsafe {
+        SendMessageW(
+            target,
+            crate::settings::WM_GET_TWEAK,
+            Some(WPARAM(id)),
+            Some(LPARAM(0)),
+        )
+    };
+    value.0 != 0
+}
+
+/// Carry out tray menu command `id`.
+fn command(hwnd: HWND, id: usize) {
+    // SAFETY: GWLP_USERDATA holds the wallpaper window; the rest are plain calls and posts.
+    unsafe {
+        let target = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
+        match id {
+            ID_PAUSE => {
+                let _ = PostMessageW(Some(target), WM_TOGGLE_PAUSE, WPARAM(0), LPARAM(0));
+            }
+            ID_SETTINGS => crate::settings::open(target),
+            ID_CLOCK | ID_LOCK => {
+                // Toggle and save (value 0 or 1000).
+                let setting = if id == ID_CLOCK {
+                    crate::ui::CLOCK
+                } else {
+                    crate::ui::LOCK_SCREEN
+                };
+                let on = setting_on(target, setting);
+                let _ = PostMessageW(
+                    Some(target),
+                    crate::settings::WM_TWEAK,
+                    WPARAM(setting | 1 << 8),
+                    LPARAM(if on { 0 } else { 1000 }),
+                );
+            }
+            ID_UPDATE => check_for_updates(hwnd),
+            ID_SAVER => {
+                if let Err(e) = crate::saver::install() {
+                    failed(hwnd, "Couldn't install the screen saver", &e);
+                }
+            }
+            ID_AUTOSTART => {
+                if let Err(e) = crate::autostart::set(!crate::autostart::enabled()) {
+                    failed(hwnd, "Couldn't change Start with Windows", &e);
+                }
+                crate::settings::refresh();
+            }
+            ID_QUIT => {
+                let _ = PostMessageW(Some(target), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
+            id if id >= ID_THEME_BASE => {
+                let _ = PostMessageW(
+                    Some(target),
+                    WM_SET_THEME,
+                    WPARAM(id - ID_THEME_BASE),
+                    LPARAM(0),
+                );
+            }
+            id if id >= ID_ANIM_BASE => {
+                let _ = PostMessageW(
+                    Some(target),
+                    WM_SET_ANIMATION,
+                    WPARAM(id - ID_ANIM_BASE),
+                    LPARAM(0),
+                );
+            }
+            _ => {}
+        }
     }
 }

@@ -8,7 +8,7 @@ A live wallpaper for Windows 10/11 and macOS 12+: contour maps, ASCII art and ge
 - 23 animations: Matrix rain, Plasma, Fire, Waves, Ripples, Wind (ASCII); Constellation, Flow field (graphics); Helix, Wire globe, Dot wave, Cubes, Sunburst, Moon (geometric loops); Lava lamp, Ink in water (fluid); Topographic drift, Ridgelines, Isobars, Wood grain, Interference, Hillshade topo, Dune ripples (contour).
 - 22 themes: Matrix, Mono, Amber CRT; Catppuccin Mocha, Tokyo Night, Nord, Gruvbox Dark, Dracula, Rosé Pine, Kanagawa, One Dark, Solarized Dark, Everforest, Monokai, Ayu Dark, Night Owl, Palenight, GitHub Dark, Oxocarbon, Poimandres; Synthwave '84, Claude.
 - Also as a screen saver, and as a still frame on the lock screen.
-- Pauses while a fullscreen app is open or battery saver is on (Windows), or while the desktop is covered or Low Power Mode is on (macOS).
+- Pauses while the screen is locked or the display is off, and (optionally) while a fullscreen app is open or battery saver is on (Windows), or while the desktop is covered or Low Power Mode is on (macOS).
 - Low CPU use: on an 8-thread CPU at 3440×1440, the ASCII and loop animations use under 1% and the contour and fluid ones 1 to 3% (Dune ripples about 4.5%), with 45 to 70 MB of memory, most of it the GPU driver. Smaller overall scales draw more detail and cost more.
 
 ## Use
@@ -19,7 +19,8 @@ Run `glyphdrift.exe`. Left-click its tray icon (or run it again) to open **Setti
 - **Theme**, with swatches of each theme's colors
 - Sliders for **speed**, **icon readability** (fades the animation so icon labels stay legible), **overall scale** and **object scale**, plus a **frame rate** choice (Auto, 15 to 60 fps)
 - **Show clock**: time and date (your regional format) in a framed box at the center of Topographic drift; the contour lines flow around it
-- **Show on lock screen** (off by default): sets the lock screen picture to a still frame of the current animation and theme, without the clock. It's redrawn when you change animation, theme or scale, and every 5 minutes. Your own picture is saved first and comes back when you turn this off. Windows doesn't let apps animate the lock screen; the screen saver is the way to see it moving
+- **Show on lock screen** (off by default): sets the lock screen picture to a still frame of the current animation and theme, without the clock. It's redrawn when you change animation, theme or scale, and every 5 minutes. Your own picture is saved first and comes back when you turn this off. Windows doesn't let apps animate the lock screen; the screen saver is the way to see it moving. If your lock screen is Windows Spotlight, there's no picture file to save, so turning this off leaves the last frame until you pick a new background
+- **Pause during fullscreen apps** and **Pause on battery saver** (both on by default), and **Start with Windows**
 
 Hover over any setting for a short explanation. Controls that don't apply to the current animation are greyed out. Right-click the tray icon for quick actions:
 
@@ -27,11 +28,12 @@ Hover over any setting for a short explanation. Controls that don't apply to the
 |---|---|
 | Settings… | Open the settings window |
 | Animation | Switch animation |
+| Theme | Switch theme |
 | Show clock | Toggle the Topographic drift clock |
 | Show on lock screen | Toggle the lock screen frame |
 | Install screen saver… | Install Glyphdrift as your screen saver (see below) |
 | Start with Windows | Run at sign-in (also listed in Settings > Apps > Startup) |
-| Pause / Resume | Stop or restart the animation. While paused (by you, a fullscreen app or battery saver) the icon turns grey and its hover text says why |
+| Pause / Resume | Stop or restart the animation. While paused (by you, a locked screen, the display turning off, a fullscreen app or battery saver) the icon turns grey and its hover text says why |
 | Quit | Exit and restore the normal wallpaper |
 
 Changes apply immediately and are remembered.

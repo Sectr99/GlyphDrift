@@ -34,10 +34,6 @@ impl Plasma {
 }
 
 impl Animation for Plasma {
-    fn name(&self) -> &'static str {
-        "plasma"
-    }
-
     fn init(&mut self, size: Size, _seed: u64) {
         let (cols, rows) = (size.cols, size.rows);
         self.cols = cols;

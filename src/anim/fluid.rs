@@ -56,9 +56,6 @@ impl LavaLamp {
 }
 
 impl Animation for LavaLamp {
-    fn name(&self) -> &'static str {
-        "lava"
-    }
     fn warm(&self) -> bool {
         true
     }
@@ -174,9 +171,6 @@ impl Topographic {
 }
 
 impl Animation for Topographic {
-    fn name(&self) -> &'static str {
-        "topo"
-    }
     fn fps(&self) -> u32 {
         20 // slow drift: fewer frames save the most
     }
@@ -442,9 +436,6 @@ impl Ink {
 }
 
 impl Animation for Ink {
-    fn name(&self) -> &'static str {
-        "ink"
-    }
     fn fps(&self) -> u32 {
         20 // the simulation runs at a fixed 30 steps per second
     }

@@ -1,9 +1,11 @@
 //! Show on lock screen (Windows): a still frame of the animation as the lock screen picture,
 //! through the Windows Runtime `LockScreen` API (it works without an installer). The user's
 //! own picture is remembered when this is first turned on and put back when it's turned off.
-//! The Windows calls run on a short-lived thread, so the wallpaper never waits on them.
+//! The Windows calls run in order on a worker thread, so the wallpaper never waits on them.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Sender};
+use std::sync::OnceLock;
 
 use windows::core::HSTRING;
 use windows::Storage::StorageFile;
@@ -20,7 +22,7 @@ pub fn frame_path(n: u32) -> Option<PathBuf> {
     Some(dir()?.join(format!("lock-screen-{}.png", n % 2)))
 }
 
-/// The user's own picture, remembered while ours is shown.
+/// The user's own picture, remembered while ours is shown; empty if it couldn't be read.
 fn original_note() -> Option<PathBuf> {
     Some(dir()?.join("lock-screen-original.txt"))
 }
@@ -30,13 +32,15 @@ fn original_note() -> Option<PathBuf> {
 pub fn show(frame: PathBuf) {
     run(move || {
         if let Some(note) = original_note().filter(|n| !n.exists()) {
-            match current_picture() {
-                Some(own) if !is_ours(&own) => {
-                    std::fs::write(&note, own.to_string_lossy().as_bytes())
-                        .map_err(|e| format!("{}: {e}", note.display()))?;
-                }
-                _ => {}
+            let own = current_picture().filter(|p| !is_ours(p));
+            if own.is_none() {
+                log!(
+                    "lock screen: your current picture isn't a file (Windows Spotlight?), so                      turning this off can't bring it back"
+                );
             }
+            let text = own.map(|p| p.to_string_lossy().into_owned());
+            std::fs::write(&note, text.unwrap_or_default())
+                .map_err(|e| format!("{}: {e}", note.display()))?;
         }
         set(&frame)
     });
@@ -48,8 +52,11 @@ pub fn restore() {
         let Some(note) = original_note().filter(|n| n.exists()) else {
             return Ok(());
         };
-        let own = PathBuf::from(std::fs::read_to_string(&note).map_err(|e| format!("{e}"))?);
-        if own.exists() {
+        let own = std::fs::read_to_string(&note).map_err(|e| format!("{e}"))?;
+        let own = PathBuf::from(own);
+        if own.as_os_str().is_empty() {
+            // Not readable when first shown, already logged.
+        } else if own.exists() {
             set(&own)?;
         } else {
             log!(
@@ -62,16 +69,27 @@ pub fn restore() {
     });
 }
 
-/// Run `f` on its own thread in the Windows Runtime's multithreaded apartment, logging
-/// any error.
+type Job = Box<dyn FnOnce() -> Result<(), String> + Send>;
+
+/// Run `f` on the worker thread, in the Windows Runtime's multithreaded apartment, logging
+/// any error. One thread runs the jobs in order: a `restore` never loses to a `show` sent
+/// before it.
 fn run(f: impl FnOnce() -> Result<(), String> + Send + 'static) {
-    std::thread::spawn(move || {
-        // SAFETY: initializes COM for this new thread only; it ends with the thread.
-        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        if let Err(e) = f() {
-            log!("lock screen: {e}");
-        }
+    static WORKER: OnceLock<Sender<Job>> = OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        std::thread::spawn(move || {
+            // SAFETY: initializes COM for this thread only; it lives as long as the process.
+            let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            for job in rx {
+                if let Err(e) = job() {
+                    log!("lock screen: {e}");
+                }
+            }
+        });
+        tx
     });
+    let _ = worker.send(Box::new(f));
 }
 
 fn set(path: &Path) -> Result<(), String> {

@@ -52,10 +52,6 @@ impl Fire {
 }
 
 impl Animation for Fire {
-    fn name(&self) -> &'static str {
-        "fire"
-    }
-
     fn warm(&self) -> bool {
         true
     }

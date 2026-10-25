@@ -41,6 +41,8 @@ const ID_CLOCK: usize = 5;
 const ID_LOCK: usize = 6;
 const ID_SAVER: usize = 7;
 const ID_ANIM_BASE: usize = 100;
+const ID_THEME_BASE: usize = 200;
+const _: () = assert!(ID_ANIM_BASE + crate::anim::ANIMATIONS.len() <= ID_THEME_BASE);
 /// Animation index in the low byte, theme index in the next.
 pub fn pack_state(anim: usize, theme: usize) -> isize {
     ((anim & 0xFF) | (theme & 0xFF) << 8) as isize
@@ -146,6 +148,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
         ICON.store(make_icon(ICON_RGB).0 as isize, Ordering::Relaxed);
         ICON_PAUSED.store(make_icon(ICON_PAUSED_RGB).0 as isize, Ordering::Relaxed);
         add_icon(hwnd);
+        crate::power::watch(hwnd);
         Ok(hwnd)
     }
 }
@@ -154,6 +157,7 @@ pub fn destroy(tray: HWND) {
     // SAFETY: `tray` was created by `create` on this thread.
     unsafe {
         remove_icon(tray);
+        crate::power::unwatch(tray);
         let _ = DestroyWindow(tray);
         for slot in [&ICON, &ICON_PAUSED] {
             let icon = slot.swap(0, Ordering::Relaxed);
@@ -216,6 +220,12 @@ pub fn notify(tray: HWND, title: &str, text: &str) {
     }
 }
 
+/// Log an error and show it as a notification.
+fn failed(tray: HWND, what: &str, error: &str) {
+    log!("{what}: {error}");
+    notify(tray, what, error);
+}
+
 /// Update hover text and paused look; no-op if unchanged.
 pub fn set_status(tray: HWND, tip: &str, paused: bool, user_paused: bool) {
     USER_PAUSED.store(user_paused, Ordering::Relaxed);
@@ -264,12 +274,16 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             if let Ok(menu) = CreatePopupMenu() {
                 let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings…"));
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-                let (anim_i, _) = unpack_state(
+                let (anim_i, theme_i) = unpack_state(
                     SendMessageW(target, WM_GET_STATE, Some(WPARAM(0)), Some(LPARAM(0))).0,
                 );
                 let anims = crate::anim::ANIMATIONS.iter().map(|a| (a.1, a.2));
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Animation"));
+                }
+                let themes = crate::theme::THEMES.iter().map(|t| (t.label, t.group));
+                if let Some(sub) = radio_submenu(themes, ID_THEME_BASE, theme_i) {
+                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Theme"));
                 }
                 let on = |setting: usize| {
                     SendMessageW(
@@ -280,8 +294,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     )
                     .0 != 0
                 };
-                let clock = on(crate::settings::CLOCK);
-                let lock = on(crate::settings::LOCK_SCREEN);
+                let clock = on(crate::ui::CLOCK);
+                let lock = on(crate::ui::LOCK_SCREEN);
                 for (id, checked, label) in [
                     (ID_CLOCK, clock, w!("Show clock")),
                     (ID_LOCK, lock, w!("Show on lock screen")),
@@ -330,9 +344,9 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     ID_CLOCK | ID_LOCK => {
                         // Toggle and save (value 0 or 1000).
                         let (setting, on) = if cmd.0 as usize == ID_CLOCK {
-                            (crate::settings::CLOCK, clock)
+                            (crate::ui::CLOCK, clock)
                         } else {
-                            (crate::settings::LOCK_SCREEN, lock)
+                            (crate::ui::LOCK_SCREEN, lock)
                         };
                         let _ = PostMessageW(
                             Some(target),
@@ -343,16 +357,25 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     }
                     ID_SAVER => {
                         if let Err(e) = crate::saver::install() {
-                            log!("screen saver: {e}");
+                            failed(hwnd, "Couldn't install the screen saver", &e);
                         }
                     }
                     ID_AUTOSTART => {
                         if let Err(e) = crate::autostart::set(!autostart) {
-                            log!("autostart: {e}");
+                            failed(hwnd, "Couldn't change Start with Windows", &e);
                         }
+                        crate::settings::refresh();
                     }
                     ID_QUIT => {
                         let _ = PostMessageW(Some(target), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                    id if id >= ID_THEME_BASE => {
+                        let _ = PostMessageW(
+                            Some(target),
+                            WM_SET_THEME,
+                            WPARAM(id - ID_THEME_BASE),
+                            LPARAM(0),
+                        );
                     }
                     id if id >= ID_ANIM_BASE => {
                         let _ = PostMessageW(
@@ -368,6 +391,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_DESTROY => LRESULT(0),
+        m if crate::power::on_message(m, wp, lp) => LRESULT(1),
         m if m != 0 && m == TASKBAR_CREATED.load(Ordering::Relaxed) => {
             // Explorer restarted; re-add the icon.
             add_icon(hwnd);

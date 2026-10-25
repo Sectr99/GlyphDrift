@@ -100,7 +100,6 @@ impl Size {
 }
 
 pub trait Animation {
-    fn name(&self) -> &'static str;
     /// Use the theme's warm gradient instead of the cool one.
     fn warm(&self) -> bool {
         false
@@ -127,65 +126,76 @@ pub trait Animation {
     fn set_keep_clear(&mut self, _area: Option<((f32, f32), (f32, f32))>) {}
 }
 
-/// (config name, menu label, menu group).
-pub const ANIMATIONS: &[(&str, &str, &str)] = &[
-    ("matrix", "Matrix rain", "ascii"),
-    ("plasma", "Plasma", "ascii"),
-    ("fire", "Fire", "ascii"),
-    ("waves", "Waves", "ascii"),
-    ("ripples", "Ripples", "ascii"),
-    ("wind", "Wind", "ascii"),
-    ("constellation", "Constellation", "graphics"),
-    ("flow", "Flow field", "graphics"),
-    ("helix", "Helix", "loops"),
-    ("globe", "Wire globe", "loops"),
-    ("dotwave", "Dot wave", "loops"),
-    ("cubes", "Cubes", "loops"),
-    ("sunburst", "Sunburst", "loops"),
-    ("moon", "Moon", "loops"),
-    ("lava", "Lava lamp", "fluid"),
-    ("ink", "Ink in water", "fluid"),
-    ("topo", "Topographic drift", "contour"),
-    ("ridges", "Ridgelines", "contour"),
-    ("isobars", "Isobars", "contour"),
-    ("wood", "Wood grain", "contour"),
-    ("interference", "Interference", "contour"),
-    ("hillshade", "Hillshade topo", "contour"),
-    ("dunes", "Dune ripples", "contour"),
+/// Lists the animations once: `ANIMATIONS` and `by_name` both come from it.
+macro_rules! animations {
+    ($(($name:literal, $label:literal, $group:literal, $make:expr)),* $(,)?) => {
+        /// (config name, menu label, menu group).
+        pub const ANIMATIONS: &[(&str, &str, &str)] = &[$(($name, $label, $group)),*];
+
+        /// Build an animation by config name. Unknown names fall back to matrix.
+        pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
+            const MAKE: &[fn(&str) -> Box<dyn Animation>] = &[$($make),*];
+            MAKE[index_of(name)](ramp)
+        }
+    };
+}
+
+animations![
+    // First: the fallback for unknown names.
+    (
+        "matrix",
+        "Matrix rain",
+        "ascii",
+        |_| Box::new(Matrix::new())
+    ),
+    ("plasma", "Plasma", "ascii", |r| Box::new(Plasma::new(r))),
+    ("fire", "Fire", "ascii", |r| Box::new(Fire::new(r))),
+    ("waves", "Waves", "ascii", |_| Box::new(Waves::new())),
+    ("ripples", "Ripples", "ascii", |_| Box::new(Ripples::new())),
+    ("wind", "Wind", "ascii", |_| Box::new(Wind::new())),
+    ("constellation", "Constellation", "graphics", |_| Box::new(
+        Constellation::new()
+    )),
+    ("flow", "Flow field", "graphics", |_| Box::new(Flow::new())),
+    ("helix", "Helix", "loops", |_| Box::new(Helix::new())),
+    ("globe", "Wire globe", "loops", |_| Box::new(Globe::new())),
+    ("dotwave", "Dot wave", "loops", |_| Box::new(DotWave::new())),
+    ("cubes", "Cubes", "loops", |_| Box::new(Cubes::new())),
+    ("sunburst", "Sunburst", "loops", |_| Box::new(
+        Sunburst::new()
+    )),
+    ("moon", "Moon", "loops", |_| Box::new(Moon::new())),
+    ("lava", "Lava lamp", "fluid", |_| Box::new(LavaLamp::new())),
+    ("ink", "Ink in water", "fluid", |_| Box::new(Ink::new())),
+    ("topo", "Topographic drift", "contour", |_| Box::new(
+        Topographic::new()
+    )),
+    ("ridges", "Ridgelines", "contour", |_| Box::new(
+        Ridgelines::new()
+    )),
+    (
+        "isobars",
+        "Isobars",
+        "contour",
+        |_| Box::new(Isobars::new())
+    ),
+    ("wood", "Wood grain", "contour", |_| Box::new(
+        WoodGrain::new()
+    )),
+    ("interference", "Interference", "contour", |_| Box::new(
+        Interference::new()
+    )),
+    ("hillshade", "Hillshade topo", "contour", |_| Box::new(
+        Hillshade::new()
+    )),
+    ("dunes", "Dune ripples", "contour", |_| Box::new(
+        Dunes::new()
+    )),
 ];
 
 /// Index into `ANIMATIONS`; unknown names give 0 (matrix).
 pub fn index_of(name: &str) -> usize {
     ANIMATIONS.iter().position(|a| a.0 == name).unwrap_or(0)
-}
-
-/// Build an animation by config name. Unknown names fall back to matrix.
-pub fn by_name(name: &str, ramp: &str) -> Box<dyn Animation> {
-    match name {
-        "plasma" => Box::new(Plasma::new(ramp)),
-        "fire" => Box::new(Fire::new(ramp)),
-        "waves" => Box::new(Waves::new()),
-        "ripples" => Box::new(Ripples::new()),
-        "wind" => Box::new(Wind::new()),
-        "constellation" => Box::new(Constellation::new()),
-        "flow" => Box::new(Flow::new()),
-        "helix" => Box::new(Helix::new()),
-        "globe" => Box::new(Globe::new()),
-        "dotwave" => Box::new(DotWave::new()),
-        "cubes" => Box::new(Cubes::new()),
-        "sunburst" => Box::new(Sunburst::new()),
-        "moon" => Box::new(Moon::new()),
-        "lava" => Box::new(LavaLamp::new()),
-        "topo" => Box::new(Topographic::new()),
-        "ink" => Box::new(Ink::new()),
-        "ridges" => Box::new(Ridgelines::new()),
-        "isobars" => Box::new(Isobars::new()),
-        "wood" => Box::new(WoodGrain::new()),
-        "interference" => Box::new(Interference::new()),
-        "hillshade" => Box::new(Hillshade::new()),
-        "dunes" => Box::new(Dunes::new()),
-        _ => Box::new(Matrix::new()),
-    }
 }
 
 #[cfg(test)]
@@ -198,7 +208,6 @@ mod tests {
 
     fn frame_and_shapes(name: &str, seed: u64) -> (Grid, Vec<Shape>) {
         let mut a = by_name(name, " .:-=+*#%@");
-        assert_eq!(a.name(), name);
         a.init(Size::cells(60, 30), seed);
         let mut g = Grid::new(60, 30);
         for _ in 0..48 {

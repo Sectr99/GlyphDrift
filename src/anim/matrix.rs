@@ -47,10 +47,6 @@ impl Default for Matrix {
 }
 
 impl Animation for Matrix {
-    fn name(&self) -> &'static str {
-        "matrix"
-    }
-
     fn init(&mut self, size: Size, seed: u64) {
         let (cols, rows) = (size.cols, size.rows);
         self.rng = Rng::new(seed);

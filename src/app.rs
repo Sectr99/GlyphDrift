@@ -48,6 +48,7 @@ use crate::settings;
 use crate::shape::Shape;
 use crate::theme::{self, THEMES};
 use crate::tray;
+use crate::ui;
 
 const TIMER_ID: usize = 1;
 /// A plain WM_TIMER at the frame interval: modal loops (scrollbar drags, window moves, the
@@ -237,7 +238,11 @@ impl App {
 
     /// Show on lock screen: draw a fresh frame when one is due. Called once a second.
     fn sync_lock_screen(&mut self) {
-        if !self.cfg.general.lock_screen || self.mode != Mode::Wallpaper {
+        // Not while locked: the animation is paused, and a new picture would flicker.
+        if !self.cfg.general.lock_screen
+            || self.mode != Mode::Wallpaper
+            || power::hidden().is_some()
+        {
             return;
         }
         let stale = self
@@ -302,13 +307,15 @@ impl App {
         self.last_power_check = Instant::now();
         let before = self.paused();
         let g = &self.cfg.general;
-        self.auto_paused = if g.pause_on_fullscreen && power::fullscreen_app_active() {
-            Some("a fullscreen app is open")
-        } else if g.pause_on_battery_saver && power::battery_saver_on() {
-            Some("battery saver is on")
-        } else {
-            None
-        };
+        self.auto_paused = power::hidden().or_else(|| {
+            if g.pause_on_fullscreen && power::fullscreen_app_active() {
+                Some("a fullscreen app is open")
+            } else if g.pause_on_battery_saver && power::battery_saver_on() {
+                Some("battery saver is on")
+            } else {
+                None
+            }
+        });
         self.update_tray();
         self.paused() != before
     }
@@ -440,24 +447,29 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         tray::WM_SET_ANIMATION => {
             if let (Some(app), Some(&(name, ..))) = (app_of(hwnd), anim::ANIMATIONS.get(wp.0)) {
                 app.cfg.general.animation = name.into();
-                app.anim = anim::by_name(name, &app.cfg.theme.ramp);
-                app.resize(app.width, app.height); // re-inits and renders
-                app.apply_colors();
-                app.timer.set(app.interval_ms()); // frame rate may differ
+                app.apply(engine::Changed {
+                    animation: true,
+                    frame_rate: true, // the animation's own rate may differ
+                    ..Default::default()
+                });
                 save("general", "animation", name);
-                app.lock_due = true;
+                app.update_tray();
                 let _ = InvalidateRect(Some(hwnd), None, false);
-                refresh_settings();
+                settings::refresh();
             }
             LRESULT(0)
         }
         tray::WM_SET_THEME => {
             if let (Some(app), Some(t)) = (app_of(hwnd), THEMES.get(wp.0)) {
                 app.cfg.theme.name = t.name.into();
-                app.apply_colors();
+                app.apply(engine::Changed {
+                    colors: true,
+                    ..Default::default()
+                });
                 save("theme", "name", t.name);
-                app.lock_due = true;
+                app.update_tray();
                 let _ = InvalidateRect(Some(hwnd), None, false);
+                settings::refresh(); // picked from the tray
             }
             LRESULT(0)
         }
@@ -466,9 +478,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let (id, commit) = (wp.0 & 0xFF, (wp.0 >> 8) & 1 == 1);
                 app.tweak(id, lp.0 as f32 / 1000.0, commit);
                 let _ = InvalidateRect(Some(hwnd), None, false);
-                if id == settings::CLOCK || id == settings::LOCK_SCREEN {
-                    refresh_settings(); // toggled from the tray
+                if id == ui::CLOCK || id == ui::LOCK_SCREEN {
+                    settings::refresh(); // toggled from the tray
                 }
+            }
+            LRESULT(0)
+        }
+        settings::WM_SAVE_TWEAKS => {
+            if let Some(app) = app_of(hwnd) {
+                let ids: Vec<usize> = (0..usize::BITS as usize)
+                    .filter(|i| wp.0 >> i & 1 == 1)
+                    .collect();
+                engine::save_tweaks(&app.cfg, &ids);
             }
             LRESULT(0)
         }
@@ -712,15 +733,6 @@ pub fn run(mode: Mode) -> Result<()> {
 
         drop(Box::from_raw(app_ptr));
         result
-    }
-}
-
-/// Ask an open settings window to re-read the settings.
-fn refresh_settings() {
-    let window = settings::window();
-    if !window.is_invalid() {
-        // SAFETY: plain message post; a stale handle just fails.
-        let _ = unsafe { PostMessageW(Some(window), settings::WM_REFRESH, WPARAM(0), LPARAM(0)) };
     }
 }
 

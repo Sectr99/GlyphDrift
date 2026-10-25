@@ -85,10 +85,8 @@ pub fn layout() -> [i32; 6] {
 /// The primary monitor (x, y, w, h) in window pixels. The window spans the virtual
 /// screen, whose origin may be negative; the primary starts at screen (0, 0).
 pub fn primary_in_window() -> (f32, f32, f32, f32) {
-    let v = virtual_screen();
-    // SAFETY: no preconditions.
-    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
-    (-v.left as f32, -v.top as f32, w as f32, h as f32)
+    let [left, top, _, _, w, h] = layout();
+    (-left as f32, -top as f32, w as f32, h as f32)
 }
 
 /// Size `hwnd` to the virtual screen; on 24H2+ also put it directly below the icons.

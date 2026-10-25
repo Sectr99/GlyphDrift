@@ -83,10 +83,6 @@ impl Default for Flow {
 }
 
 impl Animation for Flow {
-    fn name(&self) -> &'static str {
-        "flow"
-    }
-
     fn fps(&self) -> u32 {
         30
     }

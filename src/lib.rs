@@ -15,6 +15,7 @@ pub mod icon;
 pub mod shape;
 pub mod theme;
 pub mod ui;
+pub mod update;
 
 #[cfg(windows)]
 pub mod app;

@@ -48,6 +48,8 @@ features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    "Web_Http",
+    "Web_Http_Headers",
 ]
 
 # AppKit, Metal, Core Graphics and Core Text bindings for the macOS host.

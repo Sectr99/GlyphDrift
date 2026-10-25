@@ -9,8 +9,8 @@ use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
+    ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
+    NIM_DELETE, NIM_MODIFY, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
@@ -18,8 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadIconW, PostMessageW, RegisterClassW, RegisterWindowMessageW, SendMessageW,
     SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, CREATESTRUCTW, GWLP_USERDATA, HICON,
     HMENU, IDI_APPLICATION, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    SM_CXSMICON, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY,
-    WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
+    SM_CXSMICON, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE,
+    WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
 };
 
 /// To the wallpaper: Pause/Resume.
@@ -40,6 +40,9 @@ const ID_SETTINGS: usize = 4;
 const ID_CLOCK: usize = 5;
 const ID_LOCK: usize = 6;
 const ID_SAVER: usize = 7;
+const ID_UPDATE: usize = 8;
+/// From the update check's thread: LPARAM = a `Box<update::Outcome>`.
+const WM_UPDATE_CHECKED: u32 = WM_APP + 14;
 const ID_ANIM_BASE: usize = 100;
 const ID_THEME_BASE: usize = 200;
 const _: () = assert!(ID_ANIM_BASE + crate::anim::ANIMATIONS.len() <= ID_THEME_BASE);
@@ -89,6 +92,10 @@ static TIP: Mutex<String> = Mutex::new(String::new());
 static PAUSED: AtomicBool = AtomicBool::new(false);
 /// Paused from the menu (it then offers Resume), not automatically.
 static USER_PAUSED: AtomicBool = AtomicBool::new(false);
+/// An update check is running.
+static CHECKING: AtomicBool = AtomicBool::new(false);
+/// The last notification announced an update: clicking it opens the download page.
+static CLICK_DOWNLOADS: AtomicBool = AtomicBool::new(false);
 
 /// White like the stock icons; grey while paused.
 const ICON_RGB: (u8, u8, u8) = (0xff, 0xff, 0xff);
@@ -201,8 +208,10 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     nid
 }
 
-/// One-off notification (a toast); clicking it opens settings.
+/// One-off notification (a toast); clicking it opens settings, or the download page after
+/// `update_checked` found an update.
 pub fn notify(tray: HWND, title: &str, text: &str) {
+    CLICK_DOWNLOADS.store(false, Ordering::Relaxed);
     // SAFETY: `tray` is the window from `create`; the struct outlives the call.
     unsafe {
         let mut nid = icon_data(tray);
@@ -217,6 +226,68 @@ pub fn notify(tray: HWND, title: &str, text: &str) {
         fill(&mut nid.szInfoTitle, title);
         fill(&mut nid.szInfo, text);
         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
+/// Start an update check unless one is running; `update_checked` gets the outcome.
+fn check_for_updates(tray: HWND) {
+    if CHECKING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let tray = tray.0 as isize; // HWND isn't Send
+    crate::update::check_in_background(move |outcome| {
+        let outcome = Box::into_raw(Box::new(outcome));
+        // SAFETY: plain post; the tray reclaims the box. If it's gone, the box leaks.
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(tray as *mut _)),
+                WM_UPDATE_CHECKED,
+                WPARAM(0),
+                LPARAM(outcome as isize),
+            );
+        }
+    });
+}
+
+/// Say what an update check found.
+fn update_checked(tray: HWND, outcome: crate::update::Outcome) {
+    use crate::update::Outcome;
+    CHECKING.store(false, Ordering::Relaxed);
+    let current = env!("CARGO_PKG_VERSION");
+    match outcome {
+        Outcome::Newer(tag) => {
+            notify(
+                tray,
+                &format!("Glyphdrift {tag} is available"),
+                &format!("You have {current}. Click here to download the new version."),
+            );
+            CLICK_DOWNLOADS.store(true, Ordering::Relaxed);
+        }
+        Outcome::Current => notify(
+            tray,
+            "Glyphdrift is up to date",
+            &format!("You have the latest version, {current}."),
+        ),
+        Outcome::Failed(e) => failed(tray, "Couldn't check for updates", &e),
+    }
+}
+
+/// Open the download page in the browser.
+fn open_downloads() {
+    // SAFETY: constant verb and NUL-terminated URL; no window needed.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &HSTRING::from(crate::update::RELEASES_URL),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    // Values above 32 mean success.
+    if result.0 as usize <= 32 {
+        log!("update: couldn't open {}", crate::update::RELEASES_URL);
     }
 }
 
@@ -265,8 +336,21 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
             LRESULT(0)
         }
+        WM_TRAY
+            if lp.0 as u32 == NIN_BALLOONUSERCLICK
+                && CLICK_DOWNLOADS.swap(false, Ordering::Relaxed) =>
+        {
+            open_downloads();
+            LRESULT(0)
+        }
         WM_TRAY if lp.0 as u32 == WM_LBUTTONUP || lp.0 as u32 == NIN_BALLOONUSERCLICK => {
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
+            LRESULT(0)
+        }
+        WM_UPDATE_CHECKED => {
+            // SAFETY: posted by `check_for_updates` with a leaked Box<Outcome>, received once.
+            let outcome = *Box::from_raw(lp.0 as *mut crate::update::Outcome);
+            update_checked(hwnd, outcome);
             LRESULT(0)
         }
         WM_TRAY if lp.0 as u32 == WM_RBUTTONUP => {
@@ -316,6 +400,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     MF_STRING
                 };
                 let _ = AppendMenuW(menu, flags, ID_AUTOSTART, w!("Start with Windows"));
+                let _ = AppendMenuW(menu, MF_STRING, ID_UPDATE, w!("Check for updates…"));
                 let pause = if USER_PAUSED.load(Ordering::Relaxed) {
                     w!("Resume")
                 } else {
@@ -355,6 +440,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                             LPARAM(if on { 0 } else { 1000 }),
                         );
                     }
+                    ID_UPDATE => check_for_updates(hwnd),
                     ID_SAVER => {
                         if let Err(e) = crate::saver::install() {
                             failed(hwnd, "Couldn't install the screen saver", &e);

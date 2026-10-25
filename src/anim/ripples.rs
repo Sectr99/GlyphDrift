@@ -48,10 +48,6 @@ impl Default for Ripples {
 }
 
 impl Animation for Ripples {
-    fn name(&self) -> &'static str {
-        "ripples"
-    }
-
     fn init(&mut self, size: Size, seed: u64) {
         let (cols, rows) = (size.cols, size.rows);
         self.cols = cols;

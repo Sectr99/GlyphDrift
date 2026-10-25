@@ -39,6 +39,8 @@ features = [
     "Win32_System_Power",
     "Win32_Security",
     "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_SystemServices",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Controls",
@@ -46,6 +48,8 @@ features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    "Web_Http",
+    "Web_Http_Headers",
 ]
 
 # AppKit, Metal, Core Graphics and Core Text bindings for the macOS host.

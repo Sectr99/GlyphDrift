@@ -2,19 +2,10 @@
 
 use serde::Deserialize;
 
+use crate::ui;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
-
-impl Rgb {
-    pub fn parse(s: &str) -> Option<Rgb> {
-        let h = s.strip_prefix('#')?;
-        if h.len() != 6 || !h.is_ascii() {
-            return None;
-        }
-        let v = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
-        Some(Rgb(v(0)?, v(2)?, v(4)?))
-    }
-}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
@@ -123,10 +114,11 @@ impl Config {
 
     fn validate(&mut self, w: &mut Vec<String>) {
         // 0 = auto.
+        let max_fps = ui::range(ui::FPS).1 as u32;
         let fps = if self.general.fps == 0 {
             0
         } else {
-            self.general.fps.clamp(1, 60)
+            self.general.fps.clamp(1, max_fps)
         };
         if fps != self.general.fps {
             w.push(format!(
@@ -135,38 +127,23 @@ impl Config {
             ));
             self.general.fps = fps;
         }
-        let speed = if self.general.speed.is_finite() {
-            self.general.speed.clamp(0.1, 4.0)
-        } else {
-            1.0
-        };
-        if speed != self.general.speed {
-            w.push(format!(
-                "speed {} out of range, using {speed}",
-                self.general.speed
-            ));
-            self.general.speed = speed;
-        }
-        let glass = if self.theme.glass.is_finite() {
-            self.theme.glass.clamp(0.0, 0.9)
-        } else {
-            0.0
-        };
-        if glass != self.theme.glass {
-            w.push(format!(
-                "glass {} out of range, using {glass}",
-                self.theme.glass
-            ));
-            self.theme.glass = glass;
-        }
-        for (name, value) in [
-            ("scale", &mut self.general.scale),
-            ("object_scale", &mut self.general.object_scale),
+        let d = General::default();
+        for (id, name, value, default) in [
+            (ui::SPEED, "speed", &mut self.general.speed, d.speed),
+            (ui::GLASS, "glass", &mut self.theme.glass, 0.0),
+            (ui::SCALE, "scale", &mut self.general.scale, d.scale),
+            (
+                ui::OBJECT_SCALE,
+                "object_scale",
+                &mut self.general.object_scale,
+                d.object_scale,
+            ),
         ] {
+            let (lo, hi) = ui::range(id);
             let clamped = if value.is_finite() {
-                value.clamp(0.5, 2.0)
+                value.clamp(lo, hi)
             } else {
-                1.0
+                default
             };
             if clamped != *value {
                 w.push(format!("{name} {value} out of range, using {clamped}"));
@@ -223,15 +200,21 @@ pub fn set_value(
     Ok(doc.to_string())
 }
 
-/// Save one setting, creating the file if needed; an unparseable file is left alone.
-pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) -> Result<(), String> {
+/// Save settings as `(section, key, value)`, creating the file if needed; an unparseable
+/// file is left alone.
+pub fn save(entries: &[(&str, &str, toml_edit::Value)]) -> Result<(), String> {
     let path = default_path().ok_or("no settings folder")?;
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let out = set_value(&text, section, key, value)?;
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    for (section, key, value) in entries {
+        text = set_value(&text, section, key, value.clone())?;
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{e}"))?;
     }
-    std::fs::write(&path, out).map_err(|e| format!("{e}"))
+    // Write then rename, so a reload never reads a half-written file.
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("{e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("{e}"))
 }
 
 /// The first-run config: no settings (all defaults). Its existence marks the first-run
@@ -345,12 +328,5 @@ mod tests {
         let (c, w) = Config::from_toml(NEW_CONFIG);
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(c.general.animation, Config::default().general.animation);
-    }
-
-    #[test]
-    fn rgb_parse() {
-        assert_eq!(Rgb::parse("#0a0B0c"), Some(Rgb(10, 11, 12)));
-        assert_eq!(Rgb::parse("0a0b0c"), None);
-        assert_eq!(Rgb::parse("#12345"), None);
     }
 }

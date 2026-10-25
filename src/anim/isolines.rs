@@ -35,7 +35,7 @@ impl Clock {
 }
 
 macro_rules! line_animation {
-    ($ty:ident, $name:literal) => {
+    ($ty:ident) => {
         #[derive(Default)]
         pub struct $ty(Clock);
 
@@ -46,9 +46,6 @@ macro_rules! line_animation {
         }
 
         impl Animation for $ty {
-            fn name(&self) -> &'static str {
-                $name
-            }
             fn fps(&self) -> u32 {
                 20 // slow drift: fewer frames save the most
             }
@@ -68,12 +65,12 @@ macro_rules! line_animation {
     };
 }
 
-line_animation!(Ridgelines, "ridges");
-line_animation!(Isobars, "isobars");
-line_animation!(WoodGrain, "wood");
-line_animation!(Interference, "interference");
-line_animation!(Hillshade, "hillshade");
-line_animation!(Dunes, "dunes");
+line_animation!(Ridgelines);
+line_animation!(Isobars);
+line_animation!(WoodGrain);
+line_animation!(Interference);
+line_animation!(Hillshade);
+line_animation!(Dunes);
 
 /// Draw iso-lines of `field` at ascending `levels`; `style(k)` gives (weight, brightness).
 fn contours(

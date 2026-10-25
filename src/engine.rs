@@ -31,14 +31,17 @@ pub struct Changed {
 /// A setting as the settings window shows it.
 pub fn tweak_value(cfg: &Config, id: usize) -> f32 {
     let g = &cfg.general;
+    let on = |b: bool| f32::from(u8::from(b));
     match id {
         ui::SPEED => g.speed,
         ui::FPS => g.fps as f32,
         ui::GLASS => cfg.theme.glass,
         ui::SCALE => g.scale,
         ui::OBJECT_SCALE => g.object_scale,
-        ui::CLOCK => f32::from(u8::from(g.clock)),
-        ui::LOCK_SCREEN => f32::from(u8::from(g.lock_screen)),
+        ui::CLOCK => on(g.clock),
+        ui::LOCK_SCREEN => on(g.lock_screen),
+        ui::PAUSE_FULLSCREEN => on(g.pause_on_fullscreen),
+        ui::PAUSE_BATTERY => on(g.pause_on_battery_saver),
         _ => 0.0,
     }
 }
@@ -47,64 +50,78 @@ pub fn tweak_value(cfg: &Config, id: usize) -> f32 {
 /// released, a box ticked) save it too.
 pub fn tweak(cfg: &mut Config, id: usize, value: f32, commit: bool) -> Changed {
     let mut changed = Changed::default();
+    let (lo, hi) = ui::range(id);
+    let v = value.clamp(lo, hi);
+    let on = value > 0.5;
+    let g = &mut cfg.general;
     match id {
-        ui::SPEED => {
-            cfg.general.speed = value.clamp(0.1, 4.0);
-            if commit {
-                save("general", "speed", decimal(cfg.general.speed));
-            }
-        }
+        ui::SPEED => g.speed = v,
         ui::FPS => {
-            cfg.general.fps = value.round().clamp(0.0, 60.0) as u32;
+            g.fps = v.round() as u32;
             changed.frame_rate = true;
-            if commit {
-                save("general", "fps", cfg.general.fps as i64);
-            }
         }
         ui::GLASS => {
-            cfg.theme.glass = value.clamp(0.0, 0.9);
+            cfg.theme.glass = v;
             changed.colors = true;
-            if commit {
-                save("theme", "glass", decimal(cfg.theme.glass));
-            }
         }
         ui::SCALE => {
-            let scale = value.clamp(0.5, 2.0);
-            if scale != cfg.general.scale {
-                cfg.general.scale = scale;
-                changed.font = true; // the font size follows the scale
-            }
-            if commit {
-                save("general", "scale", decimal(scale));
-            }
+            changed.font = v != g.scale; // the font size follows the scale
+            g.scale = v;
         }
         ui::OBJECT_SCALE => {
-            let scale = value.clamp(0.5, 2.0);
-            if scale != cfg.general.object_scale {
-                cfg.general.object_scale = scale;
-                changed.layout = true;
-            }
-            if commit {
-                save("general", "object_scale", decimal(scale));
-            }
+            changed.layout = v != g.object_scale;
+            g.object_scale = v;
         }
         ui::CLOCK => {
-            cfg.general.clock = value > 0.5;
+            g.clock = on;
             changed.frame = true;
-            if commit {
-                save("general", "clock", cfg.general.clock);
-            }
         }
         ui::LOCK_SCREEN => {
-            cfg.general.lock_screen = value > 0.5;
+            g.lock_screen = on;
             changed.lock_screen = true;
-            if commit {
-                save("general", "lock_screen", cfg.general.lock_screen);
-            }
         }
-        _ => {}
+        // Read on the next once-a-second pause check.
+        ui::PAUSE_FULLSCREEN => g.pause_on_fullscreen = on,
+        ui::PAUSE_BATTERY => g.pause_on_battery_saver = on,
+        _ => return changed,
+    }
+    if commit {
+        save_tweaks(cfg, &[id]);
     }
     changed
+}
+
+/// Where a setting is saved, and its current value.
+fn entry(cfg: &Config, id: usize) -> Option<(&'static str, &'static str, toml_edit::Value)> {
+    let g = &cfg.general;
+    Some(match id {
+        ui::SPEED => ("general", "speed", decimal(g.speed).into()),
+        ui::FPS => ("general", "fps", (g.fps as i64).into()),
+        ui::GLASS => ("theme", "glass", decimal(cfg.theme.glass).into()),
+        ui::SCALE => ("general", "scale", decimal(g.scale).into()),
+        ui::OBJECT_SCALE => ("general", "object_scale", decimal(g.object_scale).into()),
+        ui::CLOCK => ("general", "clock", g.clock.into()),
+        ui::LOCK_SCREEN => ("general", "lock_screen", g.lock_screen.into()),
+        ui::PAUSE_FULLSCREEN => (
+            "general",
+            "pause_on_fullscreen",
+            g.pause_on_fullscreen.into(),
+        ),
+        ui::PAUSE_BATTERY => (
+            "general",
+            "pause_on_battery_saver",
+            g.pause_on_battery_saver.into(),
+        ),
+        _ => return None,
+    })
+}
+
+/// Save the current value of each setting in `ids`, in one write.
+pub fn save_tweaks(cfg: &Config, ids: &[usize]) {
+    let entries: Vec<_> = ids.iter().filter_map(|&id| entry(cfg, id)).collect();
+    if let Err(e) = config::save(&entries) {
+        report(&format!("config: could not save settings: {e}"));
+    }
 }
 
 /// What a config file edit affects, from the config before (`old`) and after (`new`).
@@ -160,7 +177,7 @@ pub fn decimal(v: f32) -> f64 {
 
 /// Save one setting; a failure only loses it on restart, so it's logged, not returned.
 pub fn save(section: &str, key: &str, value: impl Into<toml_edit::Value>) {
-    if let Err(e) = config::save(section, key, value) {
+    if let Err(e) = config::save(&[(section, key, value.into())]) {
         report(&format!("config: could not save {section}.{key}: {e}"));
     }
 }
@@ -201,6 +218,12 @@ mod tests {
         assert_eq!(tweak_value(&cfg, ui::SPEED), 4.0);
         assert_eq!(tweak_value(&cfg, ui::FPS), 60.0);
         assert_eq!(tweak_value(&cfg, ui::CLOCK), 1.0);
+        assert!(tweak(&mut cfg, ui::PAUSE_BATTERY, 0.0, false) == Changed::default());
+        assert_eq!(tweak_value(&cfg, ui::PAUSE_BATTERY), 0.0);
+        // Every setting the window shows has a place in the config.
+        for id in 0..=ui::PAUSE_BATTERY {
+            assert!(entry(&cfg, id).is_some(), "setting {id} is never saved");
+        }
         assert_eq!(tweak(&mut cfg, 99, 1.0, false), Changed::default());
     }
 

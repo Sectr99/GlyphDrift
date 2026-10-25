@@ -5,7 +5,7 @@ How the app works and why. For what it does and how to use it, see the [README](
 ## Goals
 
 - A live wallpaper that can run all day: low CPU, pauses itself, no surprises
-- One small portable exe (or app on macOS): no installer, no admin rights, no network access
+- One small portable exe (or app on macOS): no installer, no admin rights, offline unless the user asks for an update check
 - Boring, auditable code: few dependencies (`windows`, `serde`, `toml_edit`; on macOS the `objc2` framework bindings), minimal `unsafe`, each block with a `// SAFETY:` note
 
 ## Layout
@@ -23,7 +23,8 @@ src/
 ├── tray/             notification-area icon and menu
 ├── config/           TOML config: load, validate, save, migrate
 ├── theme.rs          color themes and the readability veil
-├── power/            fullscreen and battery-saver detection
+├── power/            pausing: fullscreen apps, battery saver, a locked session, display off
+├── update.rs         Check for updates…: GitHub's latest release against this build
 ├── autostart.rs      Start with Windows (per-user Run key)
 ├── log.rs            glyphdrift.log next to the config (both hosts)
 ├── grid.rs, shape.rs what animations draw into
@@ -93,7 +94,7 @@ At the default scale, the ASCII and loop animations use under 1% CPU on an 8-thr
 
 ## Lock screen and screen saver
 
-- **Show on lock screen** (`lockscreen.rs`, `App::sync_lock_screen`): Windows doesn't let apps draw on the lock screen, but the WinRT `LockScreen.SetImageFileAsync` works without package identity, so the picture becomes a still frame: the current animation state redrawn without the clock (the lock screen has its own) by `Renderer::render_png`, which draws through the same `draw` as `WM_PAINT` into a WIC bitmap, cropped to the primary monitor, and encodes a PNG. A change marks the frame due and the once-a-second check redraws it, so slider drags settle first, plus every 5 minutes. Windows ignores a new picture with the current file name, so frames alternate between `lock-screen-0.png` and `lock-screen-1.png`. The WinRT calls block, so they run on a short-lived MTA thread. Before the first frame, the user's picture (`LockScreen.OriginalImageFile`) goes into `lock-screen-original.txt`; turning the option off sets it back and deletes the note. Quitting leaves the frame: Windows keeps its own copy, and the frame would otherwise flip back and forth at every sign-in.
+- **Show on lock screen** (`lockscreen.rs`, `App::sync_lock_screen`): Windows doesn't let apps draw on the lock screen, but the WinRT `LockScreen.SetImageFileAsync` works without package identity, so the picture becomes a still frame: the current animation state redrawn without the clock (the lock screen has its own) by `Renderer::render_png`, which draws through the same `draw` as `WM_PAINT` into a WIC bitmap, cropped to the primary monitor, and encodes a PNG. A change marks the frame due and the once-a-second check redraws it, so slider drags settle first, plus every 5 minutes. Windows ignores a new picture with the current file name, so frames alternate between `lock-screen-0.png` and `lock-screen-1.png`. The WinRT calls block, so they run in order on one MTA worker thread. Before the first frame, the user's picture (`LockScreen.OriginalImageFile`) goes into `lock-screen-original.txt`; turning the option off sets it back and deletes the note. Quitting leaves the frame: Windows keeps its own copy, and the frame would otherwise flip back and forth at every sign-in.
 - **Screen saver** (`saver.rs`): the same exe, copied to `%LOCALAPPDATA%\Glyphdrift\Glyphdrift.scr` (local, not roaming: it's a 1 MB binary) and handed to the shell's `install` verb, which selects it and opens Screen Saver Settings. The copy is a plain read and write, so a download mark on the exe doesn't follow and warn at every start. `main` maps Windows' arguments to a `Mode`: `/s` runs the normal frame loop in a topmost popup over the virtual screen, with no cursor, closing on a key, click, wheel, deactivation or a mouse move of more than 4 px (Windows sends a move as the window appears); `/p <hwnd>` runs it in a child of the Settings preview, focused on the whole window with the font shrunk by the preview's share of the screen width, and exits when the preview is destroyed; `/c`, or no arguments as a `.scr`, opens the running wallpaper's settings (or explains where they are). The screen saver skips the single-instance check, tray, config migration, lock screen, auto-pause (it is the fullscreen app) and config reload. At startup the wallpaper rewrites an installed `.scr` that differs from itself, so updates reach it.
 
 ## Settings, tray and messages
@@ -108,6 +109,8 @@ The settings window and tray talk to the wallpaper window with `WM_APP` messages
 | `+9`, `+10` | set / get a tweak (speed, fps, readability, scales, clock); value × 1000 |
 | `+11` | to the tray window: open settings (from a second launch) |
 | `+12` | to the settings window: refresh after a tray change |
+| `+13` | save the tweaks whose ids are set bits of WPARAM, in one write (Reset) |
+| `+14` | to the tray window: an update check's outcome (LPARAM = a boxed `update::Outcome`) |
 
 A named mutex keeps one instance; a second launch opens the first one's settings.
 
@@ -119,7 +122,7 @@ A named mutex keeps one instance; a second launch opens the first one's settings
 
 ## Security
 
-- No network access, telemetry or accounts.
+- No telemetry or accounts. The only network request is the update check (Windows), made when the user picks **Check for updates…**: one HTTPS GET of GitHub's latest-release API, comparing its tag with this build.
 - Runs as the user; the only registry write is the optional Run entry.
 - The exe isn't code-signed yet, so SmartScreen warns on first run; releases list SHA-256 checksums.
 

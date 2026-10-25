@@ -13,8 +13,24 @@ pub const OBJECT_SCALE: usize = 4;
 pub const CLOCK: usize = 5;
 /// Show on lock screen on/off (1 or 0).
 pub const LOCK_SCREEN: usize = 6;
+/// Pause while a fullscreen app is open, on/off (1 or 0).
+pub const PAUSE_FULLSCREEN: usize = 7;
+/// Pause while battery saver is on, on/off (1 or 0).
+pub const PAUSE_BATTERY: usize = 8;
 
-/// (tweak id, label, slider min, slider max, default value)
+/// The allowed range of a setting; toggles are 0 to 1.
+pub fn range(id: usize) -> (f32, f32) {
+    match id {
+        SPEED => (0.1, 4.0),
+        FPS => (0.0, 60.0),
+        GLASS => (0.0, 0.9),
+        SCALE | OBJECT_SCALE => (0.5, 2.0),
+        _ => (0.0, 1.0),
+    }
+}
+
+/// (tweak id, label, slider min, slider max, default value); min and max are `range` in
+/// hundredths.
 pub const SLIDERS: [(usize, &str, i32, i32, f32); 4] = [
     (SPEED, "Speed", 10, 400, 1.0),
     (GLASS, "Icon readability", 0, 90, 0.0),
@@ -167,6 +183,14 @@ mod tests {
                     "slider {id} position {pos}"
                 );
             }
+        }
+        for (id, _, min, max, _) in SLIDERS {
+            let (lo, hi) = range(id);
+            assert_eq!(
+                (min, max),
+                (slider_pos(lo), slider_pos(hi)),
+                "slider {id} range"
+            );
         }
         assert_eq!(FRAME_RATES[frame_rate_index(0.0)].0, 0.0);
         assert_eq!(FRAME_RATES[frame_rate_index(45.0)].0, 30.0); // ties go to the lower

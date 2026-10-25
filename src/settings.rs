@@ -24,12 +24,12 @@ use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-    GetDlgCtrlID, GetDlgItem, IsWindow, LoadIconW, PostMessageW, RegisterClassW, SendMessageW,
-    SetForegroundWindow, SetWindowTextW, ShowWindow, SystemParametersInfoW, BM_GETCHECK,
-    BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
+    GetDlgCtrlID, GetDlgItem, IsWindow, LoadIconW, MessageBoxW, PostMessageW, RegisterClassW,
+    SendMessageW, SetForegroundWindow, SetWindowTextW, ShowWindow, SystemParametersInfoW,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
     CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT, HMENU,
     LBS_HASSTRINGS, LBS_NOTIFY, LBS_OWNERDRAWVARIABLE, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL,
-    NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SPI_GETWORKAREA, SW_RESTORE,
+    MB_ICONWARNING, MB_OK, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SPI_GETWORKAREA, SW_RESTORE,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_CREATE,
     WM_CTLCOLORBTN, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND,
     WM_HSCROLL, WM_MEASUREITEM, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT,
@@ -41,14 +41,15 @@ use crate::anim::ANIMATIONS;
 use crate::theme::{gradient, THEMES};
 use crate::tray::{unpack_state, WM_GET_STATE, WM_SET_ANIMATION, WM_SET_THEME};
 use crate::ui::*;
-pub use crate::ui::{CLOCK, FPS, GLASS, LOCK_SCREEN, OBJECT_SCALE, SCALE, SPEED};
 
 /// To the wallpaper: WPARAM = tweak id | commit << 8 (save too), LPARAM = value * 1000.
 pub const WM_TWEAK: u32 = WM_APP + 9;
 /// To the wallpaper: WPARAM = tweak id; returns value * 1000.
 pub const WM_GET_TWEAK: u32 = WM_APP + 10;
 /// To this window after a change from the tray.
-pub const WM_REFRESH: u32 = WM_APP + 12;
+const WM_REFRESH: u32 = WM_APP + 12;
+/// To the wallpaper: save the settings whose tweak ids are set bits of WPARAM, in one write.
+pub const WM_SAVE_TWEAKS: u32 = WM_APP + 13;
 
 const ID_ANIMATION: usize = 100;
 const ID_THEME: usize = 101;
@@ -58,6 +59,12 @@ const ID_CLOCK_LABEL: usize = 104;
 const ID_FPS: usize = 105;
 const ID_LOCK: usize = 106;
 const ID_LOCK_LABEL: usize = 107;
+const ID_PAUSE_FULLSCREEN: usize = 108;
+const ID_PAUSE_FULLSCREEN_LABEL: usize = 109;
+const ID_PAUSE_BATTERY: usize = 110;
+const ID_PAUSE_BATTERY_LABEL: usize = 111;
+const ID_AUTOSTART: usize = 112;
+const ID_AUTOSTART_LABEL: usize = 113;
 const SS_NOTIFY: u32 = 0x100;
 const ID_CLOSE: usize = 2; // IDCANCEL, so Esc closes
 const ID_SLIDER: usize = 200; // + tweak id
@@ -69,6 +76,54 @@ const LBN_SELCHANGE: usize = 1;
 const THEME_ROWS: i32 = 8;
 const ROW_H: i32 = 30;
 const CLIENT_W: i32 = 520;
+
+/// Start with Windows: a checkbox, but not a tweak; set here, not by the wallpaper.
+const AUTOSTART: usize = 0xFF;
+
+/// Checkboxes, two to a row: (box id, label id, setting, text).
+const TOGGLES: [(usize, usize, usize, &str); 5] = [
+    (
+        ID_CLOCK,
+        ID_CLOCK_LABEL,
+        CLOCK,
+        "Show clock (Topographic drift)",
+    ),
+    (ID_LOCK, ID_LOCK_LABEL, LOCK_SCREEN, "Show on lock screen"),
+    (
+        ID_PAUSE_FULLSCREEN,
+        ID_PAUSE_FULLSCREEN_LABEL,
+        PAUSE_FULLSCREEN,
+        "Pause during fullscreen apps",
+    ),
+    (
+        ID_PAUSE_BATTERY,
+        ID_PAUSE_BATTERY_LABEL,
+        PAUSE_BATTERY,
+        "Pause on battery saver",
+    ),
+    (
+        ID_AUTOSTART,
+        ID_AUTOSTART_LABEL,
+        AUTOSTART,
+        "Start with Windows",
+    ),
+];
+
+/// The checkbox (box id, setting) that control `id` (the box or its label) belongs to.
+fn toggle_of(id: usize) -> Option<(usize, usize)> {
+    TOGGLES
+        .iter()
+        .find(|t| t.0 == id || t.1 == id)
+        .map(|t| (t.0, t.2))
+}
+
+/// Hover help, with Start with Windows's own.
+fn help(setting: usize) -> &'static str {
+    match setting {
+        AUTOSTART => "Starts Glyphdrift when you sign in to Windows.",
+        _ => hint(setting),
+    }
+}
 
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 static TARGET: AtomicIsize = AtomicIsize::new(0);
@@ -138,6 +193,15 @@ fn dpi_scale() -> f32 {
 /// The settings window, if open.
 pub fn window() -> HWND {
     HWND(WINDOW.load(Ordering::Relaxed) as *mut _)
+}
+
+/// Ask an open settings window to re-read the settings.
+pub fn refresh() {
+    let open = window();
+    if !open.is_invalid() {
+        // SAFETY: plain message post; a stale handle just fails.
+        let _ = unsafe { PostMessageW(Some(open), WM_REFRESH, WPARAM(0), LPARAM(0)) };
+    }
 }
 
 fn target() -> HWND {
@@ -234,7 +298,7 @@ fn client_height() -> i32 {
         + 14
         + SLIDERS.len() as i32 * 36
         + 36
-        + 2 * 28
+        + TOGGLES.len().div_ceil(2) as i32 * 28
         + 8
         + 28
         + M
@@ -434,36 +498,25 @@ unsafe fn build(hwnd: HWND) {
     y += 36;
     // Themed checkboxes ignore the dark text color: the box is sized to hide its own text
     // (kept for screen readers) and a clickable label sits beside it.
-    control(
-        w!("BUTTON"),
-        "Show clock (Topographic drift)",
-        WINDOW_STYLE(BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
-        (M, y, 14, 24),
-        ID_CLOCK,
-    );
-    control(
-        w!("STATIC"),
-        "Show clock (Topographic drift)",
-        WINDOW_STYLE(SS_NOTIFY),
-        (M + 20, y + 3, full - 20, LABEL_H),
-        ID_CLOCK_LABEL,
-    );
-    y += 28;
-    control(
-        w!("BUTTON"),
-        "Show on lock screen",
-        WINDOW_STYLE(BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
-        (M, y, 14, 24),
-        ID_LOCK,
-    );
-    control(
-        w!("STATIC"),
-        "Show on lock screen",
-        WINDOW_STYLE(SS_NOTIFY),
-        (M + 20, y + 3, full - 20, LABEL_H),
-        ID_LOCK_LABEL,
-    );
-    y += 28 + 8;
+    let column = full / 2;
+    for (n, &(box_id, label_id, _, text)) in TOGGLES.iter().enumerate() {
+        let (x, row_y) = (M + (n as i32 % 2) * column, y + (n as i32 / 2) * 28);
+        control(
+            w!("BUTTON"),
+            text,
+            WINDOW_STYLE(BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
+            (x, row_y, 14, 24),
+            box_id,
+        );
+        control(
+            w!("STATIC"),
+            text,
+            WINDOW_STYLE(SS_NOTIFY),
+            (x + 20, row_y + 3, column - 24, LABEL_H),
+            label_id,
+        );
+    }
+    y += TOGGLES.len().div_ceil(2) as i32 * 28 + 8;
     control(
         w!("BUTTON"),
         "Reset to defaults",
@@ -517,20 +570,16 @@ unsafe fn add_tooltips(hwnd: HWND, s: f32, dark: bool) {
             (ID_VALUE + id, id),
         ]);
     }
-    tools.extend([
-        (ID_LABEL + FPS, FPS),
-        (ID_FPS, FPS),
-        (ID_CLOCK, CLOCK),
-        (ID_CLOCK_LABEL, CLOCK),
-        (ID_LOCK, LOCK_SCREEN),
-        (ID_LOCK_LABEL, LOCK_SCREEN),
-    ]);
+    tools.extend([(ID_LABEL + FPS, FPS), (ID_FPS, FPS)]);
+    for (box_id, label_id, setting, _) in TOGGLES {
+        tools.extend([(box_id, setting), (label_id, setting)]);
+    }
     for (control, setting) in tools {
         let Ok(child) = GetDlgItem(Some(hwnd), control as i32) else {
             continue;
         };
         // The tooltip copies the text.
-        let mut text: Vec<u16> = hint(setting).encode_utf16().chain(Some(0)).collect();
+        let mut text: Vec<u16> = help(setting).encode_utf16().chain(Some(0)).collect();
         let info = TTTOOLINFOW {
             cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
             uFlags: TTF_IDISHWND | TTF_SUBCLASS,
@@ -579,14 +628,22 @@ unsafe fn load(hwnd: HWND) {
         Some(WPARAM(frame_rate_index(get_tweak(FPS)))),
         Some(LPARAM(0)),
     );
-    for (box_id, setting) in [(ID_CLOCK, CLOCK), (ID_LOCK, LOCK_SCREEN)] {
-        SendMessageW(
-            GetDlgItem(Some(hwnd), box_id as i32).unwrap_or_default(),
-            BM_SETCHECK,
-            Some(WPARAM(usize::from(get_tweak(setting) != 0.0))),
-            Some(LPARAM(0)),
-        );
+    for (box_id, _, setting, _) in TOGGLES {
+        let on = match setting {
+            AUTOSTART => crate::autostart::enabled(),
+            _ => get_tweak(setting) != 0.0,
+        };
+        set_check(hwnd, box_id, on);
     }
+}
+
+unsafe fn set_check(hwnd: HWND, box_id: usize, on: bool) {
+    SendMessageW(
+        GetDlgItem(Some(hwnd), box_id as i32).unwrap_or_default(),
+        BM_SETCHECK,
+        Some(WPARAM(usize::from(on))),
+        Some(LPARAM(0)),
+    );
 }
 
 fn get_tweak(id: usize) -> f32 {
@@ -905,27 +962,31 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                             PostMessageW(Some(target()), WM_SET_THEME, WPARAM(theme), LPARAM(0));
                     }
                 }
-                ID_CLOCK | ID_CLOCK_LABEL | ID_LOCK | ID_LOCK_LABEL
-                    if code == 0 && !label_inactive(hwnd, id) =>
-                {
+                _ if code == 0 && !label_inactive(hwnd, id) && toggle_of(id).is_some() => {
                     // BN_CLICKED / STN_CLICKED; a label click toggles the box.
-                    let (box_id, setting) = match id {
-                        ID_CLOCK | ID_CLOCK_LABEL => (ID_CLOCK, CLOCK),
-                        _ => (ID_LOCK, LOCK_SCREEN),
+                    let Some((box_id, setting)) = toggle_of(id) else {
+                        return LRESULT(0);
                     };
                     let check = GetDlgItem(Some(hwnd), box_id as i32).unwrap_or_default();
                     let mut on =
                         SendMessageW(check, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 != 0;
                     if id != box_id {
                         on = !on;
-                        SendMessageW(
-                            check,
-                            BM_SETCHECK,
-                            Some(WPARAM(usize::from(on))),
-                            Some(LPARAM(0)),
+                        set_check(hwnd, box_id, on);
+                    }
+                    if setting != AUTOSTART {
+                        tweak(setting, f32::from(u8::from(on)), true);
+                    } else if let Err(e) = crate::autostart::set(on) {
+                        log!("autostart: {e}");
+                        set_check(hwnd, box_id, !on);
+                        let text = format!("Couldn't change Start with Windows: {e}");
+                        MessageBoxW(
+                            Some(hwnd),
+                            &HSTRING::from(text),
+                            w!("Glyphdrift"),
+                            MB_OK | MB_ICONWARNING,
                         );
                     }
-                    tweak(setting, f32::from(u8::from(on)), true);
                 }
                 ID_RESET => {
                     SendMessageW(
@@ -934,7 +995,9 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                         Some(WPARAM(0)),
                         Some(LPARAM(0)),
                     );
-                    tweak(FPS, 0.0, true);
+                    // Applied one by one, then saved in one write.
+                    tweak(FPS, 0.0, false);
+                    let mut reset = 1 << FPS;
                     for (sid, _, _, _, default) in SLIDERS {
                         if let Ok(slider) = GetDlgItem(Some(hwnd), (ID_SLIDER + sid) as i32) {
                             // Leave greyed-out sliders alone.
@@ -943,8 +1006,10 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                             }
                         }
                         show(hwnd, sid, default);
-                        tweak(sid, default, true);
+                        tweak(sid, default, false);
+                        reset |= 1 << sid;
                     }
+                    let _ = PostMessageW(Some(target()), WM_SAVE_TWEAKS, WPARAM(reset), LPARAM(0));
                 }
                 ID_CLOSE => {
                     let _ = DestroyWindow(hwnd);

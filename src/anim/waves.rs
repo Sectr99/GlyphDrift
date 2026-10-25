@@ -25,10 +25,6 @@ impl Default for Waves {
 }
 
 impl Animation for Waves {
-    fn name(&self) -> &'static str {
-        "waves"
-    }
-
     fn init(&mut self, _size: Size, seed: u64) {
         // The seed only offsets the phase.
         self.t = (seed % 1000) as f32;

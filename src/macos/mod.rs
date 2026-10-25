@@ -345,12 +345,11 @@ impl App {
             return;
         };
         self.cfg.general.animation = name.into();
-        for s in &mut self.surfaces {
-            s.anim = anim::by_name(name, &self.cfg.theme.ramp);
-        }
-        self.layout(); // re-inits and renders
-        self.apply_colors();
-        self.restart_timer(); // the frame rate may differ
+        self.apply(engine::Changed {
+            animation: true,
+            frame_rate: true, // the animation's own rate may differ
+            ..Default::default()
+        });
         save("general", "animation", name);
         self.update_status();
         settings::refresh(self);
@@ -361,7 +360,10 @@ impl App {
             return;
         };
         self.cfg.theme.name = t.name.into();
-        self.apply_colors();
+        self.apply(engine::Changed {
+            colors: true,
+            ..Default::default()
+        });
         save("theme", "name", t.name);
         self.update_status();
         settings::refresh(self);
@@ -597,13 +599,17 @@ define_class!(
             with_app(|app| {
                 let anim = anim::index_of(&app.cfg.general.animation);
                 let (object_scale, _) = ui::applies(anim);
-                app.tweak(ui::FPS, 0.0, true);
+                // Applied one by one, then saved in one write.
+                app.tweak(ui::FPS, 0.0, false);
+                let mut reset = vec![ui::FPS];
                 for (id, _, _, _, default) in ui::SLIDERS {
                     // Leave greyed-out sliders alone.
                     if id != ui::OBJECT_SCALE || object_scale {
-                        app.tweak(id, default, true);
+                        app.tweak(id, default, false);
+                        reset.push(id);
                     }
                 }
+                engine::save_tweaks(&app.cfg, &reset);
                 settings::refresh(app);
             });
         }

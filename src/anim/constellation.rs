@@ -41,10 +41,6 @@ impl Default for Constellation {
 }
 
 impl Animation for Constellation {
-    fn name(&self) -> &'static str {
-        "constellation"
-    }
-
     fn fps(&self) -> u32 {
         30
     }

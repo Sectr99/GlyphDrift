@@ -9,8 +9,8 @@ use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
+    ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
+    NIM_DELETE, NIM_MODIFY, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
@@ -18,8 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadIconW, PostMessageW, RegisterClassW, RegisterWindowMessageW, SendMessageW,
     SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, CREATESTRUCTW, GWLP_USERDATA, HICON,
     HMENU, IDI_APPLICATION, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    SM_CXSMICON, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY,
-    WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
+    SM_CXSMICON, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_CLOSE,
+    WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_POPUP,
 };
 
 /// To the wallpaper: Pause/Resume.
@@ -40,7 +40,12 @@ const ID_SETTINGS: usize = 4;
 const ID_CLOCK: usize = 5;
 const ID_LOCK: usize = 6;
 const ID_SAVER: usize = 7;
+const ID_UPDATE: usize = 8;
+/// From the update check's thread: LPARAM = a `Box<update::Outcome>`.
+const WM_UPDATE_CHECKED: u32 = WM_APP + 14;
 const ID_ANIM_BASE: usize = 100;
+const ID_THEME_BASE: usize = 200;
+const _: () = assert!(ID_ANIM_BASE + crate::anim::ANIMATIONS.len() <= ID_THEME_BASE);
 /// Animation index in the low byte, theme index in the next.
 pub fn pack_state(anim: usize, theme: usize) -> isize {
     ((anim & 0xFF) | (theme & 0xFF) << 8) as isize
@@ -87,6 +92,10 @@ static TIP: Mutex<String> = Mutex::new(String::new());
 static PAUSED: AtomicBool = AtomicBool::new(false);
 /// Paused from the menu (it then offers Resume), not automatically.
 static USER_PAUSED: AtomicBool = AtomicBool::new(false);
+/// An update check is running.
+static CHECKING: AtomicBool = AtomicBool::new(false);
+/// The last notification announced an update: clicking it opens the download page.
+static CLICK_DOWNLOADS: AtomicBool = AtomicBool::new(false);
 
 /// White like the stock icons; grey while paused.
 const ICON_RGB: (u8, u8, u8) = (0xff, 0xff, 0xff);
@@ -146,6 +155,7 @@ pub fn create(wallpaper: HWND) -> Result<HWND> {
         ICON.store(make_icon(ICON_RGB).0 as isize, Ordering::Relaxed);
         ICON_PAUSED.store(make_icon(ICON_PAUSED_RGB).0 as isize, Ordering::Relaxed);
         add_icon(hwnd);
+        crate::power::watch(hwnd);
         Ok(hwnd)
     }
 }
@@ -154,6 +164,7 @@ pub fn destroy(tray: HWND) {
     // SAFETY: `tray` was created by `create` on this thread.
     unsafe {
         remove_icon(tray);
+        crate::power::unwatch(tray);
         let _ = DestroyWindow(tray);
         for slot in [&ICON, &ICON_PAUSED] {
             let icon = slot.swap(0, Ordering::Relaxed);
@@ -197,8 +208,10 @@ unsafe fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     nid
 }
 
-/// One-off notification (a toast); clicking it opens settings.
+/// One-off notification (a toast); clicking it opens settings, or the download page after
+/// `update_checked` found an update.
 pub fn notify(tray: HWND, title: &str, text: &str) {
+    CLICK_DOWNLOADS.store(false, Ordering::Relaxed);
     // SAFETY: `tray` is the window from `create`; the struct outlives the call.
     unsafe {
         let mut nid = icon_data(tray);
@@ -214,6 +227,74 @@ pub fn notify(tray: HWND, title: &str, text: &str) {
         fill(&mut nid.szInfo, text);
         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
     }
+}
+
+/// Start an update check unless one is running; `update_checked` gets the outcome.
+fn check_for_updates(tray: HWND) {
+    if CHECKING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let tray = tray.0 as isize; // HWND isn't Send
+    crate::update::check_in_background(move |outcome| {
+        let outcome = Box::into_raw(Box::new(outcome));
+        // SAFETY: plain post; the tray reclaims the box. If it's gone, the box leaks.
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(tray as *mut _)),
+                WM_UPDATE_CHECKED,
+                WPARAM(0),
+                LPARAM(outcome as isize),
+            );
+        }
+    });
+}
+
+/// Say what an update check found.
+fn update_checked(tray: HWND, outcome: crate::update::Outcome) {
+    use crate::update::Outcome;
+    CHECKING.store(false, Ordering::Relaxed);
+    let current = env!("CARGO_PKG_VERSION");
+    match outcome {
+        Outcome::Newer(tag) => {
+            notify(
+                tray,
+                &format!("Glyphdrift {tag} is available"),
+                &format!("You have {current}. Click here to download the new version."),
+            );
+            CLICK_DOWNLOADS.store(true, Ordering::Relaxed);
+        }
+        Outcome::Current => notify(
+            tray,
+            "Glyphdrift is up to date",
+            &format!("You have the latest version, {current}."),
+        ),
+        Outcome::Failed(e) => failed(tray, "Couldn't check for updates", &e),
+    }
+}
+
+/// Open the download page in the browser.
+fn open_downloads() {
+    // SAFETY: constant verb and NUL-terminated URL; no window needed.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &HSTRING::from(crate::update::RELEASES_URL),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    // Values above 32 mean success.
+    if result.0 as usize <= 32 {
+        log!("update: couldn't open {}", crate::update::RELEASES_URL);
+    }
+}
+
+/// Log an error and show it as a notification.
+fn failed(tray: HWND, what: &str, error: &str) {
+    log!("{what}: {error}");
+    notify(tray, what, error);
 }
 
 /// Update hover text and paused look; no-op if unchanged.
@@ -255,8 +336,21 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
             LRESULT(0)
         }
+        WM_TRAY
+            if lp.0 as u32 == NIN_BALLOONUSERCLICK
+                && CLICK_DOWNLOADS.swap(false, Ordering::Relaxed) =>
+        {
+            open_downloads();
+            LRESULT(0)
+        }
         WM_TRAY if lp.0 as u32 == WM_LBUTTONUP || lp.0 as u32 == NIN_BALLOONUSERCLICK => {
             crate::settings::open(HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _));
+            LRESULT(0)
+        }
+        WM_UPDATE_CHECKED => {
+            // SAFETY: posted by `check_for_updates` with a leaked Box<Outcome>, received once.
+            let outcome = *Box::from_raw(lp.0 as *mut crate::update::Outcome);
+            update_checked(hwnd, outcome);
             LRESULT(0)
         }
         WM_TRAY if lp.0 as u32 == WM_RBUTTONUP => {
@@ -264,12 +358,16 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             if let Ok(menu) = CreatePopupMenu() {
                 let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings…"));
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-                let (anim_i, _) = unpack_state(
+                let (anim_i, theme_i) = unpack_state(
                     SendMessageW(target, WM_GET_STATE, Some(WPARAM(0)), Some(LPARAM(0))).0,
                 );
                 let anims = crate::anim::ANIMATIONS.iter().map(|a| (a.1, a.2));
                 if let Some(sub) = radio_submenu(anims, ID_ANIM_BASE, anim_i) {
                     let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Animation"));
+                }
+                let themes = crate::theme::THEMES.iter().map(|t| (t.label, t.group));
+                if let Some(sub) = radio_submenu(themes, ID_THEME_BASE, theme_i) {
+                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Theme"));
                 }
                 let on = |setting: usize| {
                     SendMessageW(
@@ -280,8 +378,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     )
                     .0 != 0
                 };
-                let clock = on(crate::settings::CLOCK);
-                let lock = on(crate::settings::LOCK_SCREEN);
+                let clock = on(crate::ui::CLOCK);
+                let lock = on(crate::ui::LOCK_SCREEN);
                 for (id, checked, label) in [
                     (ID_CLOCK, clock, w!("Show clock")),
                     (ID_LOCK, lock, w!("Show on lock screen")),
@@ -302,6 +400,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     MF_STRING
                 };
                 let _ = AppendMenuW(menu, flags, ID_AUTOSTART, w!("Start with Windows"));
+                let _ = AppendMenuW(menu, MF_STRING, ID_UPDATE, w!("Check for updates…"));
                 let pause = if USER_PAUSED.load(Ordering::Relaxed) {
                     w!("Resume")
                 } else {
@@ -330,9 +429,9 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     ID_CLOCK | ID_LOCK => {
                         // Toggle and save (value 0 or 1000).
                         let (setting, on) = if cmd.0 as usize == ID_CLOCK {
-                            (crate::settings::CLOCK, clock)
+                            (crate::ui::CLOCK, clock)
                         } else {
-                            (crate::settings::LOCK_SCREEN, lock)
+                            (crate::ui::LOCK_SCREEN, lock)
                         };
                         let _ = PostMessageW(
                             Some(target),
@@ -341,18 +440,28 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                             LPARAM(if on { 0 } else { 1000 }),
                         );
                     }
+                    ID_UPDATE => check_for_updates(hwnd),
                     ID_SAVER => {
                         if let Err(e) = crate::saver::install() {
-                            log!("screen saver: {e}");
+                            failed(hwnd, "Couldn't install the screen saver", &e);
                         }
                     }
                     ID_AUTOSTART => {
                         if let Err(e) = crate::autostart::set(!autostart) {
-                            log!("autostart: {e}");
+                            failed(hwnd, "Couldn't change Start with Windows", &e);
                         }
+                        crate::settings::refresh();
                     }
                     ID_QUIT => {
                         let _ = PostMessageW(Some(target), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                    id if id >= ID_THEME_BASE => {
+                        let _ = PostMessageW(
+                            Some(target),
+                            WM_SET_THEME,
+                            WPARAM(id - ID_THEME_BASE),
+                            LPARAM(0),
+                        );
                     }
                     id if id >= ID_ANIM_BASE => {
                         let _ = PostMessageW(
@@ -368,6 +477,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_DESTROY => LRESULT(0),
+        m if crate::power::on_message(m, wp, lp) => LRESULT(1),
         m if m != 0 && m == TASKBAR_CREATED.load(Ordering::Relaxed) => {
             // Explorer restarted; re-add the icon.
             add_icon(hwnd);

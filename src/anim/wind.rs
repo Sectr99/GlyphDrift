@@ -58,10 +58,6 @@ impl Default for Wind {
 }
 
 impl Animation for Wind {
-    fn name(&self) -> &'static str {
-        "wind"
-    }
-
     fn init(&mut self, size: Size, seed: u64) {
         let (cols, rows) = (size.cols, size.rows);
         self.cols = cols;

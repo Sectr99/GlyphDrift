@@ -171,7 +171,7 @@ impl Layers {
 }
 
 macro_rules! loop_animation {
-    ($ty:ident, $name:literal) => {
+    ($ty:ident) => {
         #[derive(Default)]
         pub struct $ty(Clock);
 
@@ -182,9 +182,6 @@ macro_rules! loop_animation {
         }
 
         impl Animation for $ty {
-            fn name(&self) -> &'static str {
-                $name
-            }
             fn fps(&self) -> u32 {
                 30
             }
@@ -201,12 +198,12 @@ macro_rules! loop_animation {
     };
 }
 
-loop_animation!(Helix, "helix");
-loop_animation!(Globe, "globe");
-loop_animation!(DotWave, "dotwave");
-loop_animation!(Cubes, "cubes");
-loop_animation!(Sunburst, "sunburst");
-loop_animation!(Moon, "moon");
+loop_animation!(Helix);
+loop_animation!(Globe);
+loop_animation!(DotWave);
+loop_animation!(Cubes);
+loop_animation!(Sunburst);
+loop_animation!(Moon);
 
 impl Helix {
     /// Double helix of dots, level and centered, turning slowly, with fainter dotted base

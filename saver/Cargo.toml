@@ -1,6 +1,6 @@
 [package]
 name = "glyphdrift-saver"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 description = "Glyphdrift as a macOS screen saver (Glyphdrift.saver)"
 publish = false

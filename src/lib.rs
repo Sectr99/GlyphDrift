@@ -8,6 +8,7 @@ macro_rules! log {
 }
 
 pub mod anim;
+pub mod bench;
 pub mod config;
 pub mod engine;
 pub mod grid;

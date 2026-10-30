@@ -13,14 +13,16 @@ A live wallpaper for Windows 10/11 and macOS 12+: contour maps, ASCII art and ge
 
 ## Use
 
-Run `glyphdrift.exe`. Left-click its tray icon (or run it again) to open **Settings**, which opens beside the tray so the wallpaper stays visible as a live preview:
+Run `glyphdrift.exe`. Left-click its tray icon (or run it again) to open **Settings**, which opens beside the tray so the wallpaper stays visible as a live preview. It has two columns, what to show on the left and how it behaves on the right:
 
 - **Animation**, grouped (ASCII, Graphics, Loops, Fluid, Contour)
-- **Theme**, with swatches of each theme's colors
+- **Theme**, a list with swatches of each theme's colors
 - Sliders for **speed**, **icon readability** (fades the animation so icon labels stay legible), **overall scale** and **object scale**, plus a **frame rate** choice (Auto, 15 to 60 fps)
 - **Show clock**: time and date (your regional format) in a framed box at the center of Topographic drift; the contour lines flow around it
 - **Show on lock screen** (off by default): sets the lock screen picture to a still frame of the current animation and theme, without the clock. It's redrawn when you change animation, theme or scale, and every 5 minutes. Your own picture is saved first and comes back when you turn this off. Windows doesn't let apps animate the lock screen; the screen saver is the way to see it moving. If your lock screen is Windows Spotlight, there's no picture file to save, so turning this off leaves the last frame until you pick a new background
 - **Pause during fullscreen apps** and **Pause on battery saver** (both on by default), and **Start with Windows**
+- **Appearance** of the Settings window itself: **Style** Native (fits in with Windows) or Instrument (darker and denser, with monospaced numbers), in a light or dark **Appearance** or matching the system
+- **Check for updates** and **Reset to defaults** at the bottom; Esc or the window's close button closes it
 
 Hover over any setting for a short explanation. Controls that don't apply to the current animation are greyed out. Right-click the tray icon for quick actions:
 
@@ -45,7 +47,7 @@ Changes apply immediately and are remembered.
 
 Unzip `Glyphdrift-macos.zip` from the [latest release](https://github.com/Sectr99/GlyphDrift/releases/latest) and move **Glyphdrift.app** to Applications. It isn't notarized yet, so macOS blocks the first launch: open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**. It lives in the menu bar, with no Dock icon:
 
-- The menu bar icon's menu has **Settings…**, **Animation**, **Theme**, **Show clock**, **Match Menu Bar to Theme**, **Show on Lock Screen**, **Install Screen Saver…**, **Open at Login**, **Pause / Resume** and **Quit**. Opening the app again also opens Settings.
+- The menu bar icon's menu has **Settings…**, **Animation**, **Theme**, **Show clock**, **Match Menu Bar to Theme**, **Show on Lock Screen**, **Install Screen Saver…**, **Open at Login**, **Pause / Resume** and **Quit**. Opening the app again also opens Settings, which has the same two columns and **Style** and **Appearance** choices as on Windows.
 - macOS draws a pale frosted strip behind the menu bar wherever a window, including the wallpaper, lies under it. **Match menu bar to theme** (off by default) stops the wallpaper below the menu bar and sets the desktop picture to the theme's background color, so the menu bar sits on the theme. Your own picture is saved first and comes back when you turn the option off or quit, or on the next launch after a crash. macOS keeps a picture per Space and an app can only set the current one: other Spaces switch within a second of visiting them, and quitting restores the Space you're on. On macOS 26 you can instead turn off **System Settings > Menu Bar > Show menu bar background**.
 - **Show on lock screen** (on by default): the lock screen shows the desktop picture, not app windows, so Glyphdrift sets the picture to a still frame of the current animation and theme (without the clock, which would go stale). It's redrawn when you change animation, theme or scale, and every 5 minutes. Your own picture is saved first and comes back when you turn it off or quit, as with Match menu bar to theme; with both on, the frame gets a strip of the theme color behind the menu bar. An *animated* lock screen isn't possible with Apple's public APIs; the screen saver is the way to see it moving while the Mac is locked.
 - **Screen saver:** **Install Screen Saver…** in the menu installs `Glyphdrift.saver`, which comes inside the app; macOS asks whether to install it for you or for all users, then opens Screen Saver settings, where you pick **Glyphdrift**. It shows the animation, theme and clock set in the app (read each time it starts), on every screen. Once it's installed for you, each app update brings the saver up to date too. With **Require password after screen saver begins** on, it keeps running behind the lock until you unlock.

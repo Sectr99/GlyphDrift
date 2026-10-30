@@ -33,3 +33,8 @@ size = 16                     # pixel height (points on macOS)
 name = "matrix"
 ramp = " .:-=+*#%@"           # dark -> bright, used by plasma and fire
 glass = 0.0                   # "Icon readability": fades the animation toward the background, 0.0..=0.9
+
+[settings]
+# How the Settings window looks (the Bench design system's two styles).
+style = "native"              # native (fits in with the system) | instrument (denser, monospaced numbers)
+appearance = "system"         # system | light | dark

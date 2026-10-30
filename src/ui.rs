@@ -17,6 +17,15 @@ pub const LOCK_SCREEN: usize = 6;
 pub const PAUSE_FULLSCREEN: usize = 7;
 /// Pause while battery saver is on, on/off (1 or 0).
 pub const PAUSE_BATTERY: usize = 8;
+/// The settings window's Bench style: an index into `STYLES`.
+pub const STYLE: usize = 9;
+/// The settings window's appearance: an index into `APPEARANCES`.
+pub const APPEARANCE: usize = 10;
+
+/// Style choices, in the order of `bench::STYLE_NAMES`.
+pub const STYLES: [&str; 2] = ["Native", "Instrument"];
+/// Appearance choices, in the order of `bench::APPEARANCE_NAMES`.
+pub const APPEARANCES: [&str; 3] = ["Match system", "Light", "Dark"];
 
 /// The allowed range of a setting; toggles are 0 to 1.
 pub fn range(id: usize) -> (f32, f32) {
@@ -25,6 +34,7 @@ pub fn range(id: usize) -> (f32, f32) {
         FPS => (0.0, 60.0),
         GLASS => (0.0, 0.9),
         SCALE | OBJECT_SCALE => (0.5, 2.0),
+        APPEARANCE => (0.0, 2.0),
         _ => (0.0, 1.0),
     }
 }
@@ -71,6 +81,13 @@ pub fn hint(id: usize) -> &'static str {
             "Sets the lock screen picture to a still frame of the animation, updated every few \
              minutes. Turning it off brings back your own picture."
         }
+        PAUSE_FULLSCREEN => "Pauses while a game, video or presentation fills the screen.",
+        PAUSE_BATTERY => "Pauses while battery saver is on.",
+        STYLE => {
+            "How this window looks: Native fits in with the system; Instrument is darker and \
+             denser."
+        }
+        APPEARANCE => "Light or dark, or the same as the system.",
         _ => "",
     }
 }

@@ -231,6 +231,9 @@ impl App {
         if c.frame_rate {
             self.timer.set(self.interval_ms());
         }
+        if c.settings_look {
+            settings::refresh(); // restyles an open settings window
+        }
         if c.lock_screen && !self.cfg.general.lock_screen && self.mode == Mode::Wallpaper {
             crate::lockscreen::restore();
         }

@@ -42,6 +42,15 @@ jobs:
       - run: cargo test --locked
       # The app bundle, for this runner's architecture only; releases build universal.
       - run: macos/bundle.sh --native
+      # The website's images (the gallery and the Settings window), drawn offscreen: a look
+      # at the Mac window on every change, and fresh site/img without a Mac
+      # (web/build-assets.sh turns them into WebP).
+      - run: target/release/glyphdrift --screenshots screenshots
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots
+          path: screenshots/
+          retention-days: 7
       # The website's live previews: the animations as WebAssembly.
       - run: rustup target add wasm32-unknown-unknown
       - run: cargo clippy --locked -p glyphdrift-web --release --target wasm32-unknown-unknown -- -D warnings

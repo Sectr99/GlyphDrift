@@ -1,6 +1,6 @@
 [package]
 name = "glyphdrift"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 description = "Glyphdrift: a lightweight live wallpaper for Windows and macOS"
 

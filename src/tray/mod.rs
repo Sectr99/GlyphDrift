@@ -41,6 +41,8 @@ const ID_CLOCK: usize = 5;
 const ID_LOCK: usize = 6;
 const ID_SAVER: usize = 7;
 const ID_UPDATE: usize = 8;
+/// The Check for updates… command, for posting to the tray window as WM_COMMAND.
+pub const CHECK_FOR_UPDATES: usize = ID_UPDATE;
 /// From the update check's thread: LPARAM = a `Box<update::Outcome>`.
 const WM_UPDATE_CHECKED: u32 = WM_APP + 14;
 /// From the update install's thread: LPARAM = a `Box<Result<PathBuf, String>>`.

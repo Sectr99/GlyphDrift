@@ -47,12 +47,23 @@ pub struct Theme {
     pub glass: f32,
 }
 
+/// How the settings window looks: a Bench style and appearance (`bench::Look`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// "native" or "instrument".
+    pub style: String,
+    /// "system", "light" or "dark".
+    pub appearance: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub general: General,
     pub font: Font,
     pub theme: Theme,
+    pub settings: Settings,
 }
 
 impl Default for General {
@@ -83,6 +94,15 @@ impl Default for Font {
         Self {
             family: DEFAULT_FONT.into(),
             size: 16,
+        }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            style: "native".into(),
+            appearance: "system".into(),
         }
     }
 }
@@ -175,6 +195,21 @@ impl Config {
         {
             w.push(format!("unknown theme '{}', using matrix", self.theme.name));
             self.theme.name = d.name;
+        }
+        let s = Settings::default();
+        if !crate::bench::STYLE_NAMES.contains(&self.settings.style.as_str()) {
+            w.push(format!(
+                "unknown style '{}', using native",
+                self.settings.style
+            ));
+            self.settings.style = s.style;
+        }
+        if !crate::bench::APPEARANCE_NAMES.contains(&self.settings.appearance.as_str()) {
+            w.push(format!(
+                "unknown appearance '{}', using system",
+                self.settings.appearance
+            ));
+            self.settings.appearance = s.appearance;
         }
         if self.theme.ramp.chars().count() < 2 || !self.theme.ramp.is_ascii() {
             w.push("ramp must be 2+ ASCII characters, using default".into());
@@ -284,14 +319,18 @@ mod tests {
     #[test]
     fn clamps_and_falls_back() {
         let (c, w) = Config::from_toml(
-            "[general]\nfps = 500\nspeed = -1.0\nanimation = \"nope\"\n[theme]\nname = \"nope\"\nramp = \"x\"\n",
+            "[general]\nfps = 500\nspeed = -1.0\nanimation = \"nope\"\n[theme]\nname = \"nope\"\nramp = \"x\"\n[settings]\nstyle = \"fancy\"\nappearance = \"dim\"\n",
         );
         assert_eq!(c.general.fps, 60);
         assert_eq!(c.general.speed, 0.1);
         assert_eq!(c.general.animation, "matrix");
         assert_eq!(c.theme.name, "matrix");
         assert_eq!(c.theme.ramp, " .:-=+*#%@");
-        assert_eq!(w.len(), 5);
+        assert_eq!(
+            (c.settings.style.as_str(), c.settings.appearance.as_str()),
+            ("native", "system")
+        );
+        assert_eq!(w.len(), 7);
     }
 
     #[test]

@@ -25,9 +25,10 @@ use crate::theme::{self, THEMES};
 const SCALE: f64 = 2.0;
 /// Gallery images, in points (16:10).
 const GALLERY: (f64, f64) = (1200.0, 750.0);
-/// The "in use" image: 16:10, small enough that the settings window stays readable when
-/// the image is shown at page width.
-const IN_USE: (f64, f64) = (1000.0, 625.0);
+/// The "in use" image: 16:10, the settings window (800 x 732 pt) at the top right with
+/// 480 pt of animation beside it, small enough that the window stays readable when the
+/// image is shown at page width.
+const IN_USE: (f64, f64) = (1320.0, 825.0);
 /// Space between the settings window and the image's top and right edges, in points.
 const MARGIN: f64 = 40.0;
 /// The "in use" image's Object scale setting.

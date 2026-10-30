@@ -19,7 +19,8 @@ src/
 ├── desktop/          attaching behind the desktop icons
 ├── render/           Direct2D + DirectWrite renderer
 ├── anim/             Animation trait and the 23 animations
-├── settings.rs       the settings window (native Win32 controls)
+├── settings.rs       the settings window: Win32 controls drawn in the Bench design system
+├── bench.rs          Bench tokens (colors, sizes) and the style x appearance look, both hosts
 ├── tray/             notification-area icon and menu
 ├── config/           TOML config: load, validate, save, migrate
 ├── theme.rs          color themes and the readability veil
@@ -100,6 +101,8 @@ At the default scale, the ASCII and loop animations use under 1% CPU on an 8-thr
 
 ## Settings, tray and messages
 
+The settings window follows the Bench design system (github.com/Sectr99/bench-design-system): two 372px columns at 96 DPI (animation and theme; motion, size, behaviour, appearance), Bench's spacing steps, a footer band on `chrome`, and the user's choice of style (Native, Instrument) and appearance (Match system, Light, Dark), saved under `[settings]`. Every control is a standard one (combobox, listbox, trackbar, checkbox as a switch row, radio, button), so tab order, arrow keys, Space and screen readers behave as usual; only painting is ours: owner-draw for the lists and dropdown rows, `NM_CUSTOMDRAW` for trackbars and buttons, a subclass for the closed dropdown field, Direct2D on a DC render target for anti-aliased shapes, GDI for text. Focus rings follow Windows' keyboard cues (shown after keyboard use, like `:focus-visible`); trackbars are kept from drawing their own dotted focus box. Windows 11 colors the title bar `chrome` through DWM. A change of look rebuilds the controls and resizes the window (Instrument is denser), keeping focus on the same control. Bench has no slider component, so the slider is built from its parts: a `border-control` track, an `accent` fill and a field-colored thumb ringed in accent.
+
 The settings window and tray talk to the wallpaper window with `WM_APP` messages, so all state lives in `App`:
 
 | Message | Purpose |
@@ -109,7 +112,7 @@ The settings window and tray talk to the wallpaper window with `WM_APP` messages
 | `+5` | get animation and theme indices |
 | `+9`, `+10` | set / get a tweak (speed, fps, readability, scales, clock); value × 1000 |
 | `+11` | to the tray window: open settings (from a second launch) |
-| `+12` | to the settings window: refresh after a tray change |
+| `+12` | to the settings window: refresh after a tray or config change (and rebuild if the look changed) |
 | `+13` | save the tweaks whose ids are set bits of WPARAM, in one write (Reset) |
 | `+14` | to the tray window: an update check's outcome (LPARAM = a boxed `update::Outcome`) |
 | `+15` | to the tray window: an update install's result (LPARAM = a boxed `Result<PathBuf, String>`) |
@@ -139,7 +142,7 @@ A named mutex keeps one instance; a second launch opens the first one's settings
 - **Frame loop:** an `NSTimer` in the common run loop modes, so it keeps firing while a menu is open or a slider is dragged (Windows needs its fallback `WM_TIMER` for this). Once a second: config hot reload and pause checks.
 - **Pausing:** per window via `occlusionState`, which covers fullscreen Spaces, windows over the whole desktop and the lock screen; Low Power Mode stands in for battery saver.
 - **Rendering:** Metal with 4x MSAA. Core Graphics came first, but CPU stroking cost 40-140 ms a frame for the contour animations at Retina sizes. Now everything is triangles in one vertex format: grid cells sample a glyph atlas (Core Text rasterizes each character once), lines and flattened curves are a quad per segment with overlapping joints, circles and polygons are fans (polygons must be convex), and text shapes are cached textures. Lines thinner than a pixel fade instead of thinning, like Direct2D coverage. The CPU side is under 1.5 ms a frame for every animation; the MSAA buffer is memoryless on Apple GPUs.
-- **Menu bar and settings:** an `NSStatusItem` whose menu is rebuilt in `menuNeedsUpdate:`; the settings window uses standard AppKit controls and saves slider values on mouse-up.
+- **Menu bar and settings:** an `NSStatusItem` whose menu is rebuilt in `menuNeedsUpdate:`; the settings window has the Windows layout in standard AppKit controls, colored from `bench.rs` where AppKit allows (sliders take the Bench accent through `trackFillColor`; `NSSwitch` and radios keep the system accent), with the theme list an `NSTableView` whose `BenchRowView` draws Bench's selected row. It saves slider values on mouse-up and is rebuilt when the style or appearance changes.
 - **Single instance:** `try_lock` on a lock file next to the config; a second launch posts a distributed notification that opens the first one's settings. Reopening the app from Finder does the same through `applicationShouldHandleReopen:`.
 - **Open at Login:** a per-user LaunchAgent pointing at this executable, compared exactly like the Windows Run entry.
 - **Match menu bar to theme** (`picture.rs`): macOS backs the menu bar with a pale frosted strip wherever a window lies under it, desktop-level windows included, but leaves it clear over the desktop picture. The fix needs both halves: the wallpaper windows stop at `visibleFrame`'s top, and the picture becomes a solid PNG in the theme background (a new file name per color, or macOS keeps the cached one). The user's picture and scaling options are written to `desktop-pictures.txt` before anything changes, restored on turning off, in `applicationWillTerminate:`, or on the next launch after a crash. The check runs once a second, which also debounces slider drags and catches other Spaces, new screens and pictures the user picks meanwhile (they become the new originals).

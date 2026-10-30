@@ -19,9 +19,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSMenu,
-    NSMenuDelegate, NSMenuItem, NSPopUpButton, NSScreen, NSWindow, NSWindowDelegate,
-    NSWindowOcclusionState,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSButton,
+    NSControlTextEditingDelegate, NSMenu, NSMenuDelegate, NSMenuItem, NSPopUpButton, NSScreen,
+    NSSwitch, NSTableColumn, NSTableRowView, NSTableView, NSTableViewDataSource,
+    NSTableViewDelegate, NSView, NSWindow, NSWindowDelegate, NSWindowOcclusionState,
 };
 use objc2_foundation::{
     ns_string, NSDate, NSDateFormatter, NSDateFormatterStyle, NSDistributedNotificationCenter,
@@ -405,6 +406,9 @@ impl App {
         if c.lock_screen {
             self.picture_due = true;
         }
+        if c.settings_look {
+            settings::rebuild(self);
+        }
     }
 
     /// Reload the config if the file changed, applying only what differs. True if reloaded.
@@ -535,10 +539,21 @@ define_class!(
             with_app(|app| app.set_animation(i));
         }
 
-        #[unsafe(method(popupTheme:))]
-        fn popup_theme(&self, popup: &NSPopUpButton) {
-            let i = popup.selectedTag() as usize;
-            with_app(|app| app.set_theme(i));
+        /// A settings switch; its tag is the setting.
+        #[unsafe(method(switchChanged:))]
+        fn switch_changed(&self, switch: &NSSwitch) {
+            with_app(|app| settings::switch_changed(app, switch));
+        }
+
+        /// The settings window's Style or Appearance radios.
+        #[unsafe(method(chooseStyle:))]
+        fn choose_style(&self, button: &NSButton) {
+            with_app(|app| settings::choice_changed(app, button));
+        }
+
+        #[unsafe(method(chooseAppearance:))]
+        fn choose_appearance(&self, button: &NSButton) {
+            with_app(|app| settings::choice_changed(app, button));
         }
 
         #[unsafe(method(toggleClock:))]
@@ -650,6 +665,54 @@ define_class!(
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
             with_app(|app| menu::fill(app, menu));
+        }
+    }
+
+    unsafe impl NSControlTextEditingDelegate for Controller {}
+
+    /// The settings window's theme list.
+    unsafe impl NSTableViewDataSource for Controller {
+        #[unsafe(method(numberOfRowsInTableView:))]
+        fn number_of_rows(&self, _table: &NSTableView) -> isize {
+            settings::theme_row_count()
+        }
+    }
+
+    unsafe impl NSTableViewDelegate for Controller {
+        #[unsafe(method_id(tableView:viewForTableColumn:row:))]
+        fn view_for_row(
+            &self,
+            _table: &NSTableView,
+            _column: Option<&NSTableColumn>,
+            row: isize,
+        ) -> Option<Retained<NSView>> {
+            settings::theme_row_view(self.mtm(), row)
+        }
+
+        #[unsafe(method_id(tableView:rowViewForRow:))]
+        fn row_view(&self, _table: &NSTableView, _row: isize) -> Option<Retained<NSTableRowView>> {
+            Some(settings::theme_row_container(self.mtm()))
+        }
+
+        #[unsafe(method(tableView:heightOfRow:))]
+        fn height_of_row(&self, _table: &NSTableView, row: isize) -> f64 {
+            settings::theme_row_height(row)
+        }
+
+        /// Group labels can't be picked.
+        #[unsafe(method(tableView:shouldSelectRow:))]
+        fn should_select_row(&self, _table: &NSTableView, row: isize) -> bool {
+            settings::theme_row_selectable(row)
+        }
+
+        #[unsafe(method(tableViewSelectionDidChange:))]
+        fn selection_did_change(&self, note: &NSNotification) {
+            let Some(table) = note.object() else {
+                return;
+            };
+            // SAFETY: this delegate is only the theme list's.
+            let row = unsafe { msg_send![&*table, selectedRow] };
+            with_app(|app| settings::theme_selected(app, row));
         }
     }
 

@@ -26,6 +26,8 @@ pub struct Changed {
     pub menu_bar: bool,
     /// Show on lock screen was turned on or off.
     pub lock_screen: bool,
+    /// The settings window's style or appearance: redraw it.
+    pub settings_look: bool,
 }
 
 /// A setting as the settings window shows it.
@@ -42,8 +44,15 @@ pub fn tweak_value(cfg: &Config, id: usize) -> f32 {
         ui::LOCK_SCREEN => on(g.lock_screen),
         ui::PAUSE_FULLSCREEN => on(g.pause_on_fullscreen),
         ui::PAUSE_BATTERY => on(g.pause_on_battery_saver),
+        ui::STYLE => index(&crate::bench::STYLE_NAMES, &cfg.settings.style),
+        ui::APPEARANCE => index(&crate::bench::APPEARANCE_NAMES, &cfg.settings.appearance),
         _ => 0.0,
     }
+}
+
+/// Position of `name` in `names`, as a setting value; unknown names give 0.
+fn index(names: &[&str], name: &str) -> f32 {
+    names.iter().position(|n| *n == name).unwrap_or(0) as f32
 }
 
 /// Apply a setting from the settings window or menu, clamped; with `commit` (a slider
@@ -83,6 +92,18 @@ pub fn tweak(cfg: &mut Config, id: usize, value: f32, commit: bool) -> Changed {
         // Read on the next once-a-second pause check.
         ui::PAUSE_FULLSCREEN => g.pause_on_fullscreen = on,
         ui::PAUSE_BATTERY => g.pause_on_battery_saver = on,
+        ui::STYLE | ui::APPEARANCE => {
+            let (names, field): (&[&str], _) = if id == ui::STYLE {
+                (&crate::bench::STYLE_NAMES, &mut cfg.settings.style)
+            } else {
+                (
+                    &crate::bench::APPEARANCE_NAMES,
+                    &mut cfg.settings.appearance,
+                )
+            };
+            *field = names[(v.round() as usize).min(names.len() - 1)].into();
+            changed.settings_look = true;
+        }
         _ => return changed,
     }
     if commit {
@@ -112,6 +133,12 @@ fn entry(cfg: &Config, id: usize) -> Option<(&'static str, &'static str, toml_ed
             "pause_on_battery_saver",
             g.pause_on_battery_saver.into(),
         ),
+        ui::STYLE => ("settings", "style", cfg.settings.style.as_str().into()),
+        ui::APPEARANCE => (
+            "settings",
+            "appearance",
+            cfg.settings.appearance.as_str().into(),
+        ),
         _ => return None,
     })
 }
@@ -138,6 +165,8 @@ pub fn reloaded(old: &Config, new: &Config) -> Changed {
         frame: o.clock != n.clock,
         menu_bar: o.match_menu_bar != n.match_menu_bar,
         lock_screen: o.lock_screen != n.lock_screen,
+        settings_look: (&old.settings.style, &old.settings.appearance)
+            != (&new.settings.style, &new.settings.appearance),
     }
 }
 
@@ -221,7 +250,15 @@ mod tests {
         assert!(tweak(&mut cfg, ui::PAUSE_BATTERY, 0.0, false) == Changed::default());
         assert_eq!(tweak_value(&cfg, ui::PAUSE_BATTERY), 0.0);
         // Every setting the window shows has a place in the config.
-        for id in 0..=ui::PAUSE_BATTERY {
+        assert!(tweak(&mut cfg, ui::STYLE, 1.0, false).settings_look);
+        assert_eq!(cfg.settings.style, "instrument");
+        tweak(&mut cfg, ui::APPEARANCE, 7.0, false);
+        assert_eq!(
+            cfg.settings.appearance, "dark",
+            "clamped to the last choice"
+        );
+        assert_eq!(tweak_value(&cfg, ui::APPEARANCE), 2.0);
+        for id in 0..=ui::APPEARANCE {
             assert!(entry(&cfg, id).is_some(), "setting {id} is never saved");
         }
         assert_eq!(tweak(&mut cfg, 99, 1.0, false), Changed::default());

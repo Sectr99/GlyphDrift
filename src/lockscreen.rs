@@ -32,12 +32,15 @@ fn original_note() -> Option<PathBuf> {
 pub fn show(frame: PathBuf) {
     run(move || {
         if let Some(note) = original_note().filter(|n| !n.exists()) {
-            let own = current_picture().filter(|p| !is_ours(p));
-            if own.is_none() {
+            let current = current_picture();
+            // Already one of our frames: nothing of the user's left to remember.
+            if current.is_none() {
                 log!(
-                    "lock screen: your current picture isn't a file (Windows Spotlight?), so                      turning this off can't bring it back"
+                    "lock screen: your current picture isn't a file (Windows Spotlight?), so \
+                     turning this off can't bring it back"
                 );
             }
+            let own = current.filter(|p| !is_ours(p));
             let text = own.map(|p| p.to_string_lossy().into_owned());
             std::fs::write(&note, text.unwrap_or_default())
                 .map_err(|e| format!("{}: {e}", note.display()))?;
